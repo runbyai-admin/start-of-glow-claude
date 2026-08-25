@@ -64,8 +64,10 @@ test("starting the game loads level 1, and the light-being follows input and col
   let box = await canvas.boundingBox();
   expect(box).not.toBeNull();
 
-  // Any input starts the game from the title screen.
+  // Round 2: the menu is playable - walking into the beacon starts the game;
+  // Enter is the immediate accessibility/test path this spec uses.
   await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.keyboard.press("Enter");
   await page.waitForFunction(() => window.__glow?.scene === "level", { timeout: 15_000 });
 
   box = await canvas.boundingBox();

@@ -152,6 +152,13 @@ level 1 reads as more composed in a fresh 1-minute play than the current procedu
 
 ### Phase 2 - roughly the next month of rounds
 
+- **The menu as the first mechanic** *(added 2026-08-25: the round-2 brief names "the screen you
+  arrive at before any of it starts" as a judged surface, and this plan had skipped the menu
+  entirely - a real omission, since it is the one screen every session and every judging pass
+  starts on).* The title screen becomes a small playable clearing: the wisp is already there,
+  light follows the cursor, and starting the game is walking into a lit beacon - the core verb
+  taught wordlessly before play begins, in the game's own language instead of a "press any key"
+  instruction.
 - **A small hub between levels** - a short, wordless connective space where the previous level's fully-grown
   light is visible in the distance, so progress has a visual echo instead of a hard cut to the next stage.
 - **A light meta-progression**, still localStorage-only, no backend: lifetime motes collected quietly

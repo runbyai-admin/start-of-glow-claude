@@ -204,7 +204,9 @@ async function startLevelOne(page) {
   await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("body[data-game-ready='true']", { timeout: 60_000 });
   const box = await page.locator("canvas").boundingBox();
+  // Round 2 menu is playable; Enter is the immediate start path for drivers.
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await page.keyboard.press("Enter");
   await waitScene(page, (s) => s.scene === "level" && s.level === 1, "level 1");
   await frames(page, 4);
   return box;
