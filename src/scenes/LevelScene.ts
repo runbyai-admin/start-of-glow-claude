@@ -364,6 +364,8 @@ export class LevelScene extends Phaser.Scene {
     });
     flecks.setScrollFactor(0.9).setDepth(-8);
 
+    this.buildWinds();
+
     const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-storm-${this.config.index}`]);
     const flash = this.add
       .rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, VIEW_WIDTH, VIEW_HEIGHT, 0xcdd8ff)
@@ -386,6 +388,35 @@ export class LevelScene extends Phaser.Scene {
       });
     };
     schedule();
+  }
+
+  /**
+   * The wind zones' visible bodies (round 2): each current carries its own
+   * denser fleck stream flowing along its push vector, world-anchored inside
+   * the zone's rectangle - so the force is readable before it is felt, the
+   * same fairness rule the hazards' cold lights follow. The ambient storm
+   * flecks stay screen-space set dressing; these are the mechanic's telltale.
+   */
+  private buildWinds(): void {
+    for (const z of this.config.winds ?? []) {
+      const stream = this.add.particles(0, 0, "spark", {
+        emitZone: {
+          type: "random",
+          source: new Phaser.Geom.Rectangle(z.x, z.y, z.w, z.h),
+          quantity: 1,
+        },
+        speedX: { min: z.vx * 0.85, max: z.vx * 1.25 },
+        speedY: { min: z.vy * 0.85, max: z.vy * 1.25 },
+        lifespan: { min: 900, max: 1700 },
+        scale: { start: 0.34, end: 0.1 },
+        alpha: { start: 0.42, end: 0 },
+        quantity: 1,
+        frequency: 26,
+        tint: [0x9db4e8, 0xbcd0f4, 0x86a0d8],
+        blendMode: Phaser.BlendModes.ADD,
+      });
+      stream.setDepth(-6);
+    }
   }
 
   /**
@@ -557,6 +588,29 @@ export class LevelScene extends Phaser.Scene {
     }
     this.wisp.x += dx;
     this.wisp.y += dy;
+
+    // Wind (round 2): a current pushes the wisp AND its chase target, so the
+    // drift is real displacement, not a nudge the trailing ease immediately
+    // pulls back (pushing only the wisp left a ~20px equilibrium wobble - the
+    // proportional pull toward a pinned target cancels any constant force).
+    // Pushing both means a light left unattended genuinely blows downwind
+    // until the player fights back - every pointer twitch re-pins the target
+    // to the cursor, and the 480 px/s cap vs |wind| <= ~120 keeps escape easy.
+    // Applied after the cap on purpose: the cap governs what the PLAYER can
+    // do; the storm is the world doing something to them.
+    for (const z of this.config.winds ?? []) {
+      if (
+        this.wisp.x >= z.x && this.wisp.x <= z.x + z.w &&
+        this.wisp.y >= z.y && this.wisp.y <= z.y + z.h
+      ) {
+        this.wisp.x += z.vx * dt;
+        this.wisp.y += z.vy * dt;
+        this.target.x += z.vx * dt;
+        this.target.y += z.vy * dt;
+      }
+    }
+    this.wisp.x = Phaser.Math.Clamp(this.wisp.x, 27, WORLD_WIDTH - 27);
+    this.wisp.y = Phaser.Math.Clamp(this.wisp.y, 27, WORLD_HEIGHT - 27);
     this.wispLight.setPosition(this.wisp.x, this.wisp.y);
     this.hazardTrail.setPosition(0, 0);
 
@@ -794,6 +848,7 @@ export class LevelScene extends Phaser.Scene {
       wispY: Math.round(this.wisp.y),
       motes: this.motes.map((m) => ({ x: Math.round(m.x), y: Math.round(m.y) })),
       hazards: this.hazards.map((h) => ({ x: Math.round(h.img.x), y: Math.round(h.img.y) })),
+      winds: this.config.winds ?? [],
     };
   }
 }

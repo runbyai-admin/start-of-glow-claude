@@ -16,6 +16,23 @@ export interface LevelLayout {
   hazards: Array<Array<{ x: number; y: number }>>;
 }
 
+/**
+ * A rectangular wind current (round 2): while the wisp is inside, the storm
+ * pushes it by (vx, vy) px/s on top of its own movement. Rules that keep it
+ * a mechanic and not a punishment: |v| stays well under the wisp's 480 px/s
+ * cap so no current is ever inescapable, and every zone is made visible by
+ * its own drifting fleck stream (LevelScene.buildWinds) - a force you cannot
+ * see coming is cheap, the same principle the hazards' lights follow.
+ */
+export interface WindZone {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  vx: number;
+  vy: number;
+}
+
 export interface LevelConfig {
   /** 1-based, also the RNG seed so layouts are stable run to run. */
   index: number;
@@ -33,6 +50,8 @@ export interface LevelConfig {
   /** Sky seed, forest tint, and - for storm-dark - a real weather layer (see LevelScene.buildStorm). */
   mood: "dusk" | "deep-night" | "storm-dark";
   layout?: LevelLayout;
+  /** Wind currents (round 2) - so far only the storm level carries them. */
+  winds?: WindZone[];
 }
 
 /**
@@ -102,7 +121,27 @@ export const LEVELS: LevelConfig[] = [
     layout: LEVEL_1_LAYOUT,
   },
   { index: 2, name: "Where the Trees Close In", moteCount: 18, requiredMotes: 13, hazardCount: 4, hazardSpeed: 95, mood: "deep-night" },
-  { index: 3, name: "The Last Clearing", moteCount: 22, requiredMotes: 16, hazardCount: 6, hazardSpeed: 120, mood: "storm-dark" },
+  {
+    index: 3,
+    name: "The Last Clearing",
+    moteCount: 22,
+    requiredMotes: 16,
+    hazardCount: 6,
+    hazardSpeed: 120,
+    mood: "storm-dark",
+    // The storm finally touches the player. Two currents, both escapable and
+    // both readable by their fleck streams:
+    // - the open midfield blows hard left-and-down: crossing the middle costs
+    //   fighting the storm, hugging the calmer low tree line does not - a
+    //   routing choice, not a wall;
+    // - an updraft channel on the beacon approach helps you climb toward the
+    //   goal, but it feeds you INTO the circuit hazard's triangle - the
+    //   level's standing risk/reward shape, now done with weather.
+    winds: [
+      { x: 1100, y: 60, w: 560, h: 520, vx: -115, vy: 30 },
+      { x: 1880, y: 260, w: 340, h: 420, vx: 55, vy: -95 },
+    ],
+  },
 ];
 
 export function levelFor(index: number): LevelConfig | undefined {
