@@ -93,3 +93,71 @@ failed on - shows all four lines cleanly legible with the intended hierarchy. Co
 not vibed: 1.27-1.85:1 before, 7.2-14.9:1 after (WCAG formula, against the sky base). The
 probe needs a temporary `window.__game` line in `main.ts` that is never committed or deployed
 (the deployed bundle is grep-verified free of it).
+
+## Round 2 - Claude (the menu is a mechanic, and every level has one, 2026-08-25/26)
+
+Round 2's brief: the main menu and the mechanics, judged from the deployed slot with no cap on
+play time. Built on `round-2-base` (= the round-1 winner): three additions that give every
+surface of the game a mechanic of its own, plus the robustness work an uncapped judging session
+implies.
+
+**The menu is the first mechanic.** The title screen is now a playable dark clearing: the wisp
+is already alive there, light follows the cursor with *exactly* the level scene's trailing
+movement (same ease, same 480px/s cap - the menu must feel like the game it opens or the
+teaching is a lie), and starting is done in the game's own language - carry your light into the
+warm beacon. Proven mouse-only by a scripted real-input run; Enter/Space still start instantly
+(accessibility, and the test path), a quiet hint fades in only after ~7s of genuine stalling,
+and a returning player's best run sits under the title, discovered rather than announced.
+
+**Level 3: wind currents.** The storm finally touches the player - two data-driven currents
+(`winds` in `levels.ts`), each made visible by its own fleck stream flowing along its push
+vector: a hard midfield crosswind that makes crossing the open middle a routing choice, and a
+beacon-approach updraft that helps you climb directly into the circuit hazard's triangle - the
+level's standing risk/reward shape, now done with weather. The real work was a physics bug:
+wind that pushes only the wisp is cancelled by the trailing ease (a proportional controller)
+at a ~20px equilibrium wobble - caught by refusing to trust "the direction looks right",
+measuring drift with a teleport probe, and instrumenting two iterations until drift ==
+wind x accumulated-game-dt exactly. Wind pushes the wisp AND its chase target, applied after
+the player-motion cap on purpose: the cap governs what the player can do; the storm is the
+world acting on them.
+
+**Level 2: shy motes.** Six of eighteen motes are pale, skittish ones (seeded pick, own
+silver-teal texture - legible at a glance). Rush at them and they bolt; approach slowly - or
+freeze until they settle - and they collect like any other. Flight drains a stamina pool in
+~2.4s, their speed sags as they tire, and a spent mote settles dim until calm refills it; flee
+direction is biased away from the beacon (a chase can never drag you into an accidental level
+completion) and clamped to the playfield, and displaced motes drift home once you are well
+away. One whisper line teaches the rule at the first startle. The counts are load-bearing:
+13-of-18 required with only 12 normal motes guarantees at least one shy encounter per clear,
+and flawless means taming all six. Why this shape and not plain flee-on-proximity: the
+arithmetic (480px/s wisp vs any catchable flee speed) makes a pure chase a sub-second
+non-event; the startle threshold makes the player's own approach speed the input - the one
+thing no other mechanic in the game asks them to modulate - and stamina guarantees every chase
+terminates, for humans and scripted drivers alike.
+
+**Telemetry grew with the mechanics.** The published mote positions now refresh live every
+frame (shy motes move; a driver reading collect-event snapshots would chase phantom
+coordinates), each mote carries a `shy` flag, `winds` are published, and `activeTweens` backs
+an event-driven leak check. `?level=N` on the menu is the new dev/test hook for opening a
+later level directly - it is how the shy mechanic gets probed in isolation.
+
+**Verification, sized for an uncapped judging session.** `scripts/shy-probe.mjs` proves the
+shy rule with real mouse input against `?level=2`: rush -> flee >70px from home, sustained
+chase -> tired -> caught, calm creep -> collected with 5px of drift, live telemetry moving
+frame-to-frame, exactly 6 shy of 18, required 13. `scripts/round2-gate.mjs` is one scripted
+session that plays the whole thing the way a judge would: menu started by walking the beacon
+(no keyboard), level 1 by its cautious route, level 2 greedily against the shy motes, three
+deliberate hazard deaths in a row on level 3 each verified to respawn clean, the storm played
+through, the ending reached with the best recorded, a keypress back to the menu, and a fresh
+second run that collects and dies and recovers - with the tween population sampled at every
+checkpoint to rule out leak growth across death/level churn. Both smoke tests green.
+
+**The two-timebase discovery (standing fact for every future round).** At the ~1.3-5fps this
+shared host renders headless (three contestants building at once hits the low end - measured,
+and A/B-confirmed as contention, not code), Phaser's delta smoothing clamps each wall frame to
+~16.7ms of game time: everything dt-driven (wisp, wind, shy motes) runs at a fraction of wall
+speed while tweens (hazard patrols) advance near wall speed. Headless drivers die at crossings
+that are trivial at 60fps because hazards are genuinely ~15x faster *relative to the wisp*
+there - both timebases converge at full rate, where judging happens. Wall budgets in tests are
+environment claims, not game claims, and are sized for the contended host; details in
+ARCHITECTURE.md "Verifying a change on this host".
