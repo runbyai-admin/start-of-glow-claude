@@ -152,6 +152,25 @@ through, the ending reached with the best recorded, a keypress back to the menu,
 second run that collects and dies and recovers - with the tween population sampled at every
 checkpoint to rule out leak growth across death/level churn. Both smoke tests green.
 
+**Late addition, same day: the startle got its telegraphs.** Round 1's winning margin was
+partly sound, and the new mechanic was silent - a fresh startle now fires a quick two-grain
+skitter (rate-limited so a startled cluster reads as one darting, quieter than the collect
+chime by design) plus a subtle scale pop, both driven frame-side like the rest of the shy
+simulation. Verified by re-running the full shy-probe on the built bundle: all three
+behavioral legs intact, zero page errors across 22 driver resets with the skitter path
+firing on every rush.
+
+**What the gate actually proved before the deadline (run 6, one unbroken session, exit 0):**
+menu started by mouse alone; level 2 entered at exactly 18 motes / 6 shy / 13 required and
+beaten by greedy play against the fleeing motes; level 3 entered with both winds published;
+three deliberate hazard deaths in a row, each respawn verified clean (full mote count back,
+progress reset); the storm played through to its beacon; the ending reached with flawless=0
+and the best written to localStorage; one keypress back to the menu; and a second run whose
+entry tween census exactly matched a cold start (39 = 39 - a full playthrough plus ~57
+recovered deaths leaves zero tween residue). Two earlier gate iterations also caught two
+real design traps that are fixed above (the near-spawn shy pick and the beacon-zone mote) -
+the gate earned its keep twice before it ever passed.
+
 **The two-timebase discovery (standing fact for every future round).** At the ~1.3-5fps this
 shared host renders headless (three contestants building at once hits the low end - measured,
 and A/B-confirmed as contention, not code), Phaser's delta smoothing clamps each wall frame to
