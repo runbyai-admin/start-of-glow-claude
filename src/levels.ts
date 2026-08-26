@@ -33,6 +33,24 @@ export interface WindZone {
   vy: number;
 }
 
+/**
+ * Shy motes (round 2, level 2's mechanic): a seeded subset of the level's
+ * motes are pale and skittish. A wisp that comes inside `radius` moving
+ * faster than `rushSpeed` px/s startles them and they flee at up to
+ * `fleeSpeed`; a slow, calm approach never spooks them. Fleeing drains a
+ * stamina pool in ~2.4s so every chase ends - a tired mote settles, dim,
+ * until it recovers. The decision it creates: stalk quietly (elegant, safe)
+ * or run one down (fast, but it scatters toward walls and hazard lanes).
+ * `fleeSpeed` stays far under the wisp's 480 cap - shyness delays a catch,
+ * it never makes one impossible.
+ */
+export interface ShyConfig {
+  count: number;
+  radius: number;
+  fleeSpeed: number;
+  rushSpeed: number;
+}
+
 export interface LevelConfig {
   /** 1-based, also the RNG seed so layouts are stable run to run. */
   index: number;
@@ -52,6 +70,8 @@ export interface LevelConfig {
   layout?: LevelLayout;
   /** Wind currents (round 2) - so far only the storm level carries them. */
   winds?: WindZone[];
+  /** Shy motes (round 2) - so far only level 2 carries them. */
+  shy?: ShyConfig;
 }
 
 /**
@@ -120,7 +140,19 @@ export const LEVELS: LevelConfig[] = [
     mood: "dusk",
     layout: LEVEL_1_LAYOUT,
   },
-  { index: 2, name: "Where the Trees Close In", moteCount: 18, requiredMotes: 13, hazardCount: 4, hazardSpeed: 95, mood: "deep-night" },
+  {
+    index: 2,
+    name: "Where the Trees Close In",
+    moteCount: 18,
+    requiredMotes: 13,
+    hazardCount: 4,
+    hazardSpeed: 95,
+    mood: "deep-night",
+    // Six of eighteen are shy; twelve normal motes cannot open a beacon that
+    // wants thirteen, so the level guarantees at least one encounter with the
+    // mechanic - and a flawless run means taming all six.
+    shy: { count: 6, radius: 170, fleeSpeed: 260, rushSpeed: 150 },
+  },
   {
     index: 3,
     name: "The Last Clearing",

@@ -37,6 +37,19 @@ const ALERT_RADIUS = HAZARD_RADIUS * 2.6;
 const ALERT_TIME_SCALE = 1.55;
 const ALERT_LIGHT_INTENSITY = 1.55;
 const CALM_LIGHT_INTENSITY = 0.9;
+/**
+ * Shy-mote tuning (see updateShyMotes / ShyConfig in levels.ts). Startle
+ * lingers ~0.8s after the last rush so a mote does not calm the instant the
+ * player freezes mid-lunge - it settles when the rushing genuinely stops.
+ * Stamina empties in ~2.4s of flight and refills in ~3.5s of calm; a spent
+ * mote will not flee again until it has recovered past the 0.6 hysteresis
+ * mark, so "tired" is a real window, not a one-frame flicker.
+ */
+const SHY_STARTLE_MS = 800;
+const SHY_DRAIN_SECONDS = 2.4;
+const SHY_REGAIN_SECONDS = 3.5;
+const SHY_RECOVER_AT = 0.6;
+const SHY_HOME_SPEED = 45;
 
 interface LevelInitData {
   levelIndex: number;
@@ -44,6 +57,23 @@ interface LevelInitData {
   resets?: number;
   /** Flawless levels (every mote found) completed earlier in this run. */
   flawless?: number;
+}
+
+/**
+ * One placed mote's runtime state. Normal motes only ever use `img` (their
+ * bob is a tween); shy motes are simulated in updateShyMotes, so their
+ * logical position lives in `pos` and the rendered image adds a bob offset
+ * on top - a tween animating y would fight the flee movement frame by frame.
+ */
+interface MoteState {
+  img: Phaser.GameObjects.Image;
+  shy: boolean;
+  home: { x: number; y: number };
+  pos: { x: number; y: number };
+  stamina: number;
+  startleMs: number;
+  exhausted: boolean;
+  phase: number;
 }
 
 /** Cosmetic per-mood tint - purely a palette shift between stages, same shapes. */
@@ -75,7 +105,7 @@ export class LevelScene extends Phaser.Scene {
   private hazardTrail!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   private moteConfigs: Array<{ x: number; y: number }> = [];
-  private motes: Phaser.GameObjects.Image[] = [];
+  private motes: MoteState[] = [];
   private hazards: Array<{
     img: Phaser.GameObjects.Image;
     light: Phaser.GameObjects.Light;
@@ -86,6 +116,8 @@ export class LevelScene extends Phaser.Scene {
   private hud!: Phaser.GameObjects.Text;
   private levelCard!: Phaser.GameObjects.Text;
   private openLine!: Phaser.GameObjects.Text;
+  private whisperLine!: Phaser.GameObjects.Text;
+  private whisperShown = false;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private target = new Phaser.Math.Vector2(START_X, START_Y);
 
@@ -114,6 +146,7 @@ export class LevelScene extends Phaser.Scene {
     this.levelClear = false;
     this.flawlessNow = false;
     this.locked = false;
+    this.whisperShown = false;
     this.moteConfigs = [];
     this.motes = [];
     this.hazards = [];
@@ -123,6 +156,9 @@ export class LevelScene extends Phaser.Scene {
   preload(): void {
     makeGlowTexture(this, "wisp", 85, "rgba(255,255,255,1)", "rgba(150,214,255,0.55)");
     makeGlowTexture(this, "mote", 27, "rgba(255,244,214,1)", "rgba(255,196,92,0.5)");
+    // The shy ones are pale - cool silver-teal against the normal motes' warm
+    // gold, so which kind you are walking toward is legible at a glance.
+    makeGlowTexture(this, "mote-shy", 27, "rgba(228,252,248,1)", "rgba(148,226,214,0.5)");
     makeGlowTexture(this, "spark", 16, "rgba(255,255,255,0.9)", "rgba(190,226,255,0.35)");
     makeGlowTexture(this, "firefly", 12, "rgba(226,255,196,1)", "rgba(198,255,130,0.4)");
     makeGlowTexture(this, "beacon", 170, "rgba(255,226,168,1)", "rgba(255,182,102,0.4)");
@@ -247,26 +283,62 @@ export class LevelScene extends Phaser.Scene {
     this.spawnMotes();
   }
 
+  /**
+   * Which motes are shy, chosen by a dedicated seeded shuffle so the pick is
+   * identical on every spawn of the same level - a respawn after a snuff
+   * rebuilds the exact same clearing, pale motes in the same places.
+   */
+  private pickShyIndices(): Set<number> {
+    const out = new Set<number>();
+    const shy = this.config.shy;
+    if (!shy) return out;
+    const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-shy-${this.config.index}`]);
+    const order = rng.shuffle(this.moteConfigs.map((_, i) => i));
+    for (const i of order.slice(0, Math.min(shy.count, order.length))) out.add(i);
+    return out;
+  }
+
   private spawnMotes(): void {
     for (const m of this.motes) {
-      this.tweens.killTweensOf(m);
-      m.destroy();
+      this.tweens.killTweensOf(m.img);
+      m.img.destroy();
     }
     this.motes = [];
+    const shyIndices = this.pickShyIndices();
     const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-motes-${this.config.index}`]);
-    for (const cfg of this.moteConfigs) {
-      const mote = this.add.image(cfg.x, cfg.y, "mote").setBlendMode(Phaser.BlendModes.ADD).setScale(0.55).setDepth(5);
-      this.tweens.add({
-        targets: mote,
-        y: cfg.y - rng.between(8, 21),
-        alpha: { from: 0.55, to: 1 },
-        duration: rng.between(1200, 2200),
-        yoyo: true,
-        repeat: -1,
-        ease: "Sine.easeInOut",
+    this.moteConfigs.forEach((cfg, i) => {
+      const shy = shyIndices.has(i);
+      const img = this.add
+        .image(cfg.x, cfg.y, shy ? "mote-shy" : "mote")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setScale(0.55)
+        .setDepth(5);
+      if (shy) {
+        // No tween: shy motes are simulated in updateShyMotes, which drives
+        // their bob and alpha itself - see the MoteState note.
+        img.setAlpha(0.88);
+      } else {
+        this.tweens.add({
+          targets: img,
+          y: cfg.y - rng.between(8, 21),
+          alpha: { from: 0.55, to: 1 },
+          duration: rng.between(1200, 2200),
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.easeInOut",
+        });
+      }
+      this.motes.push({
+        img,
+        shy,
+        home: { x: cfg.x, y: cfg.y },
+        pos: { x: cfg.x, y: cfg.y },
+        stamina: 1,
+        startleMs: 0,
+        exhausted: false,
+        phase: rng.realInRange(0, Math.PI * 2),
       });
-      this.motes.push(mote);
-    }
+    });
   }
 
   private buildWisp(): void {
@@ -527,7 +599,33 @@ export class LevelScene extends Phaser.Scene {
       .setDepth(100)
       .setScrollFactor(0);
 
+    this.whisperLine = this.add
+      .text(VIEW_WIDTH / 2, 108, "", {
+        fontFamily: "Georgia, 'Times New Roman', serif",
+        fontSize: "16px",
+        color: "#9db4d8",
+      })
+      .setOrigin(0.5, 0)
+      .setAlpha(0)
+      .setDepth(100)
+      .setScrollFactor(0);
+
     this.updateHud();
+  }
+
+  /** One quiet teaching line, used at most once per level visit - see updateShyMotes. */
+  private showWhisper(text: string): void {
+    this.whisperLine.setText(text);
+    this.tweens.killTweensOf(this.whisperLine);
+    this.whisperLine.setAlpha(0);
+    this.tweens.add({
+      targets: this.whisperLine,
+      alpha: { from: 0, to: 0.8 },
+      duration: 700,
+      yoyo: true,
+      hold: 2600,
+      ease: "Sine.easeInOut",
+    });
   }
 
   private bindInput(): void {
@@ -588,6 +686,10 @@ export class LevelScene extends Phaser.Scene {
     }
     this.wisp.x += dx;
     this.wisp.y += dy;
+    // The wisp's own pace this frame, px per game-second - what the shy motes
+    // react to. Player motion only (post-cap), measured before wind: the storm
+    // moving you is not you rushing anyone.
+    const wispSpeed = dt > 0 ? Math.sqrt(dx * dx + dy * dy) / dt : 0;
 
     // Wind (round 2): a current pushes the wisp AND its chase target, so the
     // drift is real displacement, not a nudge the trailing ease immediately
@@ -622,6 +724,7 @@ export class LevelScene extends Phaser.Scene {
       this.hazardTrail.emitParticleAt(h.img.x, h.img.y, 1);
     }
     this.checkHazardAlerts();
+    this.updateShyMotes(dt, time, wispSpeed);
 
     if (time > this.graceUntil) {
       this.checkHazardCollisions();
@@ -634,6 +737,8 @@ export class LevelScene extends Phaser.Scene {
     // Keep the published positions live between collect/fail events, so a
     // scripted play run can steer by them - telemetry a human player already
     // has by looking at the screen, not a capability the game itself lacks.
+    // Motes included since round 2: the shy ones move, and a driver reading
+    // stale coordinates would chase spots a mote left seconds ago.
     const published = window.__glow;
     if (published && published.scene === "level") {
       published.wispX = Math.round(this.wisp.x);
@@ -645,6 +750,86 @@ export class LevelScene extends Phaser.Scene {
           h.y = Math.round(this.hazards[i].img.y);
         }
       }
+      if (published.motes.length === this.motes.length) {
+        for (let i = 0; i < this.motes.length; i += 1) {
+          published.motes[i].x = Math.round(this.motes[i].img.x);
+          published.motes[i].y = Math.round(this.motes[i].img.y);
+        }
+      }
+    }
+  }
+
+  /**
+   * The shy-mote simulation (level 2's mechanic - see ShyConfig in levels.ts).
+   * A rushing wisp inside the shy radius startles a pale mote; startle lingers
+   * SHY_STARTLE_MS past the last rush, and while startled-and-near the mote
+   * flees straight away from the wisp, tiring as it goes - flight drains its
+   * stamina, its speed sags with it, and an empty pool leaves it settled and
+   * dim until it recovers. A calm approach never triggers any of this: drift
+   * in slowly and a shy mote is collected like any other. Fleeing is biased
+   * away from the beacon so a chase can never drag the player into an
+   * accidental level completion, and clamped to the playfield so "walled" is
+   * a real place a pursuit ends.
+   */
+  private updateShyMotes(dt: number, timeMs: number, wispSpeed: number): void {
+    const shy = this.config.shy;
+    if (!shy) return;
+    for (const m of this.motes) {
+      if (!m.shy) continue;
+      const dist = Phaser.Math.Distance.Between(m.pos.x, m.pos.y, this.wisp.x, this.wisp.y);
+      const near = dist <= shy.radius;
+      if (near && wispSpeed > shy.rushSpeed && !m.exhausted) {
+        m.startleMs = SHY_STARTLE_MS;
+        if (!this.whisperShown) {
+          this.whisperShown = true;
+          this.showWhisper("the pale ones startle at a rushing light");
+        }
+      } else {
+        m.startleMs = Math.max(0, m.startleMs - dt * 1000);
+      }
+
+      const fleeing = !m.exhausted && near && m.startleMs > 0;
+      if (fleeing) {
+        m.stamina = Math.max(0, m.stamina - dt / SHY_DRAIN_SECONDS);
+        if (m.stamina === 0) m.exhausted = true;
+        let dx = m.pos.x - this.wisp.x;
+        let dy = m.pos.y - this.wisp.y;
+        const len = Math.hypot(dx, dy) || 1;
+        dx /= len;
+        dy /= len;
+        const bDist = Phaser.Math.Distance.Between(m.pos.x, m.pos.y, BEACON_X, BEACON_Y);
+        if (bDist < 260) {
+          const bw = ((260 - bDist) / 260) * 1.4;
+          dx += ((m.pos.x - BEACON_X) / (bDist || 1)) * bw;
+          dy += ((m.pos.y - BEACON_Y) / (bDist || 1)) * bw;
+          const len2 = Math.hypot(dx, dy) || 1;
+          dx /= len2;
+          dy /= len2;
+        }
+        const speed = shy.fleeSpeed * (0.45 + 0.55 * m.stamina);
+        m.pos.x = Phaser.Math.Clamp(m.pos.x + dx * speed * dt, 40, WORLD_WIDTH - 40);
+        m.pos.y = Phaser.Math.Clamp(m.pos.y + dy * speed * dt, 110, WORLD_HEIGHT - 80);
+      } else {
+        m.stamina = Math.min(1, m.stamina + dt / SHY_REGAIN_SECONDS);
+        if (m.exhausted && m.stamina >= SHY_RECOVER_AT) m.exhausted = false;
+        // With the player well away, a displaced mote drifts back toward its
+        // home spot - the clearing quietly rearranges itself behind you.
+        if (dist > shy.radius * 1.6) {
+          const hx = m.home.x - m.pos.x;
+          const hy = m.home.y - m.pos.y;
+          const hd = Math.hypot(hx, hy);
+          if (hd > 6) {
+            const step = Math.min(SHY_HOME_SPEED * dt, hd);
+            m.pos.x += (hx / hd) * step;
+            m.pos.y += (hy / hd) * step;
+          }
+        }
+      }
+
+      const bob = fleeing ? 0 : Math.sin(timeMs * 0.0021 + m.phase) * 4;
+      m.img.setPosition(m.pos.x, m.pos.y + bob);
+      const targetAlpha = m.exhausted ? 0.55 : fleeing ? 1 : 0.88;
+      m.img.alpha = Phaser.Math.Linear(m.img.alpha, targetAlpha, 1 - Math.pow(0.02, dt));
     }
   }
 
@@ -660,11 +845,11 @@ export class LevelScene extends Phaser.Scene {
   private collectNearbyMotes(): void {
     for (let i = this.motes.length - 1; i >= 0; i -= 1) {
       const mote = this.motes[i];
-      if (Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y) > COLLECT_RADIUS) continue;
+      if (Phaser.Math.Distance.Between(mote.img.x, mote.img.y, this.wisp.x, this.wisp.y) > COLLECT_RADIUS) continue;
       this.motes.splice(i, 1);
-      this.tweens.killTweensOf(mote);
-      this.trail.explode(18, mote.x, mote.y);
-      mote.destroy();
+      this.tweens.killTweensOf(mote.img);
+      this.trail.explode(18, mote.img.x, mote.img.y);
+      mote.img.destroy();
       this.collected += 1;
       this.ambience.chime(this.collected);
       this.grow();
@@ -846,9 +1031,10 @@ export class LevelScene extends Phaser.Scene {
       flawless: this.flawlessLevels,
       wispX: Math.round(this.wisp.x),
       wispY: Math.round(this.wisp.y),
-      motes: this.motes.map((m) => ({ x: Math.round(m.x), y: Math.round(m.y) })),
+      motes: this.motes.map((m) => ({ x: Math.round(m.img.x), y: Math.round(m.img.y), shy: m.shy })),
       hazards: this.hazards.map((h) => ({ x: Math.round(h.img.x), y: Math.round(h.img.y) })),
       winds: this.config.winds ?? [],
+      activeTweens: this.tweens.getTweens().length,
     };
   }
 }

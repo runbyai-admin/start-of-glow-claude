@@ -1,6 +1,7 @@
 import Phaser from "phaser";
 import { makeGlowTexture, makeSkyTexture } from "../textures";
 import { Ambience } from "../audio";
+import { LEVELS } from "../levels";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "./dimensions";
 
 const ambience = new Ambience();
@@ -206,6 +207,21 @@ export class MenuScene extends Phaser.Scene {
     }
   }
 
+  /**
+   * Where a run begins. Normally level 1; a `?level=N` query is the test
+   * hook that lets headless drivers (and a debugging human) open a later
+   * level directly - see ARCHITECTURE.md "Verifying a change". Out of range
+   * or absent falls back to 1, so the hook can never break a normal start.
+   */
+  private startLevelIndex(): number {
+    try {
+      const n = parseInt(new URLSearchParams(window.location.search).get("level") ?? "", 10);
+      return Number.isInteger(n) && n >= 1 && n <= LEVELS.length ? n : 1;
+    } catch {
+      return 1;
+    }
+  }
+
   private begin(): void {
     if (this.begun) return;
     this.begun = true;
@@ -215,7 +231,7 @@ export class MenuScene extends Phaser.Scene {
     this.tweens.add({ targets: this.beaconLight, intensity: 3.2, radius: 700, duration: 340, ease: "Sine.easeOut" });
     this.cameras.main.fadeOut(420, 5, 6, 12);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
-      this.scene.start("level", { levelIndex: 1, ambience });
+      this.scene.start("level", { levelIndex: this.startLevelIndex(), ambience });
     });
   }
 

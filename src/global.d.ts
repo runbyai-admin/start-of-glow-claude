@@ -19,11 +19,17 @@ interface GlowTestState {
   /** Live wisp world position inside a level; 0 outside one. */
   wispX: number;
   wispY: number;
-  /** World positions of the motes still uncollected / the patrolling hazards; empty outside a level. */
-  motes: Array<{ x: number; y: number }>;
+  /**
+   * World positions of the motes still uncollected / the patrolling hazards;
+   * empty outside a level. Since round 2 the level scene refreshes these live
+   * every frame (shy motes move), and each mote says whether it is shy.
+   */
+  motes: Array<{ x: number; y: number; shy?: boolean }>;
   hazards: Array<{ x: number; y: number }>;
   /** Wind zones active this level (round 2, level 3's storm mechanic); empty or absent elsewhere. */
   winds?: Array<{ x: number; y: number; w: number; h: number; vx: number; vy: number }>;
+  /** Live tween count inside a level - the long-session leak pass reads this. */
+  activeTweens?: number;
 }
 
 interface Window {
