@@ -403,20 +403,30 @@ try {
   s = await waitScene(page, (x) => x.scene === "menu", "the menu after the ending", 240_000);
   log("back at the menu - starting the second run");
   await page.keyboard.press("Enter");
-  s = await waitScene(page, (x) => x.scene === "level" && x.level === 1, "second-run level 1", 120_000);
+  // In SKIP_L1 mode the page URL still carries ?level=2, so the fresh run
+  // starts there - the freshness claims are level-agnostic on purpose.
+  const expectLevel = SKIP_L1 ? 2 : 1;
+  s = await waitScene(page, (x) => x.scene === "level" && x.level === expectLevel, `second-run level ${expectLevel}`, 120_000);
   await parkOnWisp(page, box);
   s = await state(page);
-  if (s.collected !== 0 || s.remaining !== 14 || s.resets !== 0) {
+  const expectTotal = SKIP_L1 ? 18 : 14;
+  if (s.collected !== 0 || s.remaining !== expectTotal || s.resets !== 0) {
     fail(`second run not fresh: collected=${s.collected} remaining=${s.remaining} resets=${s.resets}`);
   }
-  sampleTweens("L1 second run", s);
-  // collect the first two arc motes to prove play works post-restart
-  for (const [wx, wy] of [[330, 430], [430, 355]]) {
-    const r = await goTo(page, box, wx, wy);
-    if (!r.ok) fail(`second run: could not reach (${wx},${wy}): ${r.why}`);
+  sampleTweens("second run entry", s);
+  // Collect at least one mote to prove play works post-restart: nearest
+  // hazard-clear mote, retried across snuffs like a player would.
+  for (let tries = 0; tries < 8; tries += 1) {
+    const cur = await state(page);
+    const hazardDist = (m) => Math.min(...(cur.hazards ?? []).map((h) => Math.hypot(h.x - m.x, h.y - m.y)), 9999);
+    const wispDist = (m) => Math.hypot(m.x - cur.wispX, m.y - cur.wispY);
+    const target = (cur.motes ?? []).filter((m) => hazardDist(m) >= 200).sort((a, b) => wispDist(a) - wispDist(b))[0];
+    if (!target) { await frames(page, 6); continue; }
+    await goTo(page, box, target.x, target.y, { timeoutMs: 60_000 });
+    s = await state(page);
+    if (s.collected >= 1) break;
   }
-  s = await state(page);
-  if (s.collected < 1) fail("second run collected nothing on the opening arc");
+  if (s.collected < 1) fail("second run collected nothing");
   log(`second run collects (${s.collected}) - one more death for the road`);
   s = await dieOnce(page, box, "second-run death");
   await shot(page, "second-run-after-death.png");
