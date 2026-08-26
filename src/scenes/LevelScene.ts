@@ -50,6 +50,14 @@ const SHY_DRAIN_SECONDS = 2.4;
 const SHY_REGAIN_SECONDS = 3.5;
 const SHY_RECOVER_AT = 0.6;
 const SHY_HOME_SPEED = 45;
+/**
+ * A mote closer than this to the spawn point never enters the shy pick: the
+ * opening rush collects it before it can visibly flee, so it demonstrates
+ * nothing - and the teaching whisper would fire over a mote that no longer
+ * exists. Found the honest way: level 2's seed places a mote 49px from
+ * spawn, and the round-2 gate caught it being swallowed at level entry.
+ */
+const SHY_MIN_SPAWN_DIST = 250;
 
 interface LevelInitData {
   levelIndex: number;
@@ -278,6 +286,33 @@ export class LevelScene extends Phaser.Scene {
         const x = i < near ? rng.between(80, VIEW_WIDTH - 80) : rng.between(VIEW_WIDTH + 40, WORLD_WIDTH - 80);
         this.moteConfigs.push({ x, y: rng.between(140, WORLD_HEIGHT - 160) });
       }
+      // No seeded mote may sit close to the beacon: once the beacon is open,
+      // arriving completes the level, so a mote whose whole collect circle
+      // lies inside the completion radius is uncollectable from then on -
+      // an invisible ordering trap for flawless runs (level 2's seed
+      // genuinely placed one 32px from the beacon). Offenders are pushed
+      // radially out to a clear ring, deterministically. Hand-authored
+      // layouts are exempt: their beacon-adjacent motes are deliberate,
+      // placed where the approach from the level's interior collects them
+      // outside the completion radius.
+      const minR = BEACON_RADIUS + COLLECT_RADIUS + 25;
+      for (const m of this.moteConfigs) {
+        const d = Phaser.Math.Distance.Between(m.x, m.y, BEACON_X, BEACON_Y);
+        if (d >= minR) continue;
+        const ux = d > 0 ? (m.x - BEACON_X) / d : 1;
+        const uy = d > 0 ? (m.y - BEACON_Y) / d : 0;
+        let px = BEACON_X + ux * minR;
+        let py = BEACON_Y + uy * minR;
+        if (py < 110) {
+          // A straight push would leave the playfield band; slide along the
+          // ring instead so the distance still holds.
+          py = 110;
+          const dx = Math.sqrt(Math.max(minR * minR - (BEACON_Y - py) * (BEACON_Y - py), 0));
+          px = BEACON_X + (ux >= 0 ? dx : -dx);
+        }
+        m.x = px;
+        m.y = py;
+      }
     }
     this.totalMotes = this.moteConfigs.length;
     this.spawnMotes();
@@ -293,7 +328,11 @@ export class LevelScene extends Phaser.Scene {
     const shy = this.config.shy;
     if (!shy) return out;
     const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-shy-${this.config.index}`]);
-    const order = rng.shuffle(this.moteConfigs.map((_, i) => i));
+    const eligible = this.moteConfigs
+      .map((m, i) => ({ m, i }))
+      .filter(({ m }) => Phaser.Math.Distance.Between(m.x, m.y, START_X, START_Y) > SHY_MIN_SPAWN_DIST)
+      .map(({ i }) => i);
+    const order = rng.shuffle(eligible);
     for (const i of order.slice(0, Math.min(shy.count, order.length))) out.add(i);
     return out;
   }
