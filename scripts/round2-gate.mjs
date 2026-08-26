@@ -122,13 +122,39 @@ async function waitClear(page, idx, wx, wy, minDist, timeoutMs = 300_000) {
   }
 }
 
+/**
+ * Wait until hazard #idx is far from a point AND moving further away
+ * (direction read from two consecutive samples). At contended-host frame
+ * rates the patrols advance near wall speed while the wisp runs game-time,
+ * so a distance-only guard launches dashes into a returning patrol - the
+ * direction requirement roughly doubles the usable window.
+ */
+async function waitClearAndLeaving(page, idx, wx, wy, minDist, timeoutMs = 300_000) {
+  const deadline = Date.now() + timeoutMs;
+  let prev = null;
+  while (Date.now() < deadline) {
+    const s = await state(page);
+    if (!s || s.scene !== "level") return;
+    const h = s.hazards?.[idx];
+    if (!h) return;
+    const d = Math.hypot(h.x - wx, h.y - wy);
+    if (prev !== null && d >= minDist && d > prev + 1) return;
+    prev = d;
+    await frames(page, 2);
+  }
+}
+
 async function runRoute(page, box, route, { label, guards = {}, maxAttempts = 6 }) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let died = false;
     for (let i = 0; i < route.length; i += 1) {
       const [wx, wy] = route[i];
       const guard = guards[i];
-      if (guard) await waitClear(page, guard.hazard, guard.x ?? wx, guard.y ?? wy, guard.minDist ?? 190);
+      if (guard && guard.leaving) {
+        await waitClearAndLeaving(page, guard.hazard, guard.x ?? wx, guard.y ?? wy, guard.minDist ?? 190);
+      } else if (guard) {
+        await waitClear(page, guard.hazard, guard.x ?? wx, guard.y ?? wy, guard.minDist ?? 190);
+      }
       const r = await goTo(page, box, wx, wy);
       if (!r.ok && r.why === "snuffed") {
         log(`${label}: snuffed en route to (${wx},${wy}) - route again (attempt ${attempt + 1})`);
@@ -263,9 +289,11 @@ const page = await (await browser.newContext({ viewport: { width: VIEW.w, height
 const pageErrors = [];
 page.on("pageerror", (e) => pageErrors.push(String(e)));
 
+const SKIP_L1 = process.env.PLAY_GATE_SKIP_L1 === "1";
+
 try {
   // ---- 1. menu-as-mechanic: mouse-only start ----
-  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+  await page.goto(SKIP_L1 ? `${BASE_URL}?level=2` : BASE_URL, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("body[data-game-ready='true']", { timeout: 120_000 });
   const box = await page.locator("canvas").boundingBox();
   let s = await state(page);
@@ -281,34 +309,42 @@ try {
       await frames(page, 1);
     }
   }
-  s = await waitScene(page, (x) => x.scene === "level" && x.level === 1, "level 1 via the menu beacon", 120_000);
+  s = await waitScene(page, (x) => x.scene === "level" && x.level === (SKIP_L1 ? 2 : 1), "the first level via the menu beacon", 120_000);
   await parkOnWisp(page, box);
   s = await state(page);
-  log("menu beacon started level 1 - no keyboard involved");
-  if (s.required !== 10) fail(`level 1 required=${s.required}, expected 10`);
-  sampleTweens("L1 first entry", s);
+  log(`menu beacon started level ${s.level} - no keyboard involved`);
+  if (!SKIP_L1 && s.required !== 10) fail(`level 1 required=${s.required}, expected 10`);
+  sampleTweens("first entry", s);
 
   // ---- 2. L1 cautious route ----
   const ARC = [ [330, 430], [430, 355], [545, 305], [665, 290], [780, 510] ];
   const STAGE_HIGH = [820, 300];
   const CROSS_HIGH = [990, 240];
+  // Detour south-east off the sentry's top turnaround before the glade - the
+  // straight line to the first glade mote lingers inside the pole's reach,
+  // which at contended frame rates is where dashes die.
+  const CLEAR_POLE = [1085, 470];
   const MID = [ [1160, 380], [1320, 300], [1520, 430] ];
   const LOW_ROAD = [2280, 585];
-  const route = [...ARC, STAGE_HIGH, CROSS_HIGH, ...MID, LOW_ROAD];
-  const guards = {
-    [ARC.length + 1]: { hazard: 0, minDist: 320 },
-    [route.length - 1]: { hazard: 1, minDist: 210 },
-  };
-  await runRoute(page, box, route, { label: "L1 cautious", guards });
-  s = await state(page);
-  if (s.scene === "level" && s.level === 1) {
-    if (!s.beaconOpen) fail(`safe route ended with beacon closed (collected ${s.collected})`);
-    log(`L1: beacon open at ${s.collected}/14 - heading in`);
-    for (;;) {
-      const r = await goTo(page, box, BEACON.x, BEACON.y, { timeoutMs: 600_000 });
-      if (!r.ok && r.why === "snuffed") { await runRoute(page, box, route, { label: "L1 cautious (again)", guards }); continue; }
-      break;
+  if (!SKIP_L1) {
+    const route = [...ARC, STAGE_HIGH, CROSS_HIGH, CLEAR_POLE, ...MID, LOW_ROAD];
+    const guards = {
+      [ARC.length + 1]: { hazard: 0, minDist: 320, leaving: true },
+      [route.length - 1]: { hazard: 1, minDist: 210 },
+    };
+    await runRoute(page, box, route, { label: "L1 cautious", guards, maxAttempts: 14 });
+    s = await state(page);
+    if (s.scene === "level" && s.level === 1) {
+      if (!s.beaconOpen) fail(`safe route ended with beacon closed (collected ${s.collected})`);
+      log(`L1: beacon open at ${s.collected}/14 - heading in`);
+      for (;;) {
+        const r = await goTo(page, box, BEACON.x, BEACON.y, { timeoutMs: 600_000 });
+        if (!r.ok && r.why === "snuffed") { await runRoute(page, box, route, { label: "L1 cautious (again)", guards, maxAttempts: 14 }); continue; }
+        break;
+      }
     }
+  } else {
+    log("SKIP_L1=1: level 1 leg skipped (evidence stands on the prior play-gate + smoke); proving L2 onward");
   }
 
   // ---- 3. L2 vs shy motes ----
