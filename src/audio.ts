@@ -123,6 +123,40 @@ export class Ambience {
   }
 
   /**
+   * A shy mote startling (round 2): two quick high grains falling a minor
+   * third - small and dry on purpose. It can fire several times across a
+   * chase and must read as "something small darted", never compete with
+   * the collect chime.
+   */
+  skitter(): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      const master = this.master;
+      const now = ctx.currentTime;
+      const grains: Array<[number, number]> = [
+        [0, 1318.5],
+        [0.07, 1108.7],
+      ];
+      for (const [t, f] of grains) {
+        const o = ctx.createOscillator();
+        o.type = "triangle";
+        o.frequency.value = f;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, now + t);
+        g.gain.linearRampToValueAtTime(0.045, now + t + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.16);
+        o.connect(g);
+        g.connect(master);
+        o.start(now + t);
+        o.stop(now + t + 0.2);
+      }
+    } catch {
+      /* a missed skitter is not a game-breaking error */
+    }
+  }
+
+  /**
    * A snuffed-light thud: a short burst of filtered noise plus a falling,
    * dissonant low interval. The noise is a runtime-generated buffer of
    * random values - synthesized in code, not a downloaded sound effect.

@@ -85,32 +85,85 @@ if (s.motes.length !== 18) fail(`expected 18 motes, got ${s.motes.length}`);
 if (shyCount !== 6) fail(`expected 6 shy motes, got ${shyCount}`);
 if (s.required !== 13) fail(`expected required=13, got ${s.required}`);
 
-// ---- 2 + 3: rush a shy mote, watch it flee and the telemetry move ----
-s = await state(page);
-let target = pickShy(s);
-if (!target) fail("no hazard-clear shy mote to test against");
-const home = { x: target.x, y: target.y };
-log(`rushing shy mote at (${home.x},${home.y})`);
-let fled = false;
-let lastPos = { ...home };
-let moves = 0;
-const resets0 = s.resets;
-for (let f = 0; f < 300 && !fled; f += 1) {
-  s = await state(page);
-  if (!s || s.scene !== "level") fail("scene changed mid-rush");
-  if (s.resets > resets0) fail("snuffed by a hazard mid-rush (picked mote was supposed to be clear)");
-  const m = findShyNear(s, lastPos, 140);
-  if (!m) fail("lost track of the rushed mote");
-  if (dist(m, lastPos) > 0.5) moves += 1;
-  lastPos = { x: m.x, y: m.y };
-  if (dist(m, home) > 70) {
-    fled = true;
-    break;
+/**
+ * Steer toward a world point with simple hazard repulsion (the probe's
+ * approach legs cross patrol territory now that no shy mote lives near
+ * spawn). Returns false on a snuff so the caller can retry like a player.
+ */
+async function approach(page, box, wx, wy, arrive) {
+  let s = await state(page);
+  const resets0 = s.resets;
+  for (let f = 0; f < 900; f += 1) {
+    s = await state(page);
+    if (!s || s.scene !== "level") fail("scene changed mid-approach");
+    if (s.resets > resets0) return false;
+    if (Math.hypot(wx - s.wispX, wy - s.wispY) <= arrive) return true;
+    let tx = wx;
+    let ty = wy;
+    let fx = 0;
+    let fy = 0;
+    for (const h of s.hazards ?? []) {
+      const d = Math.hypot(h.x - s.wispX, h.y - s.wispY);
+      if (d < 160 && d > 0) {
+        const w = (160 - d) / d;
+        fx += (s.wispX - h.x) * w;
+        fy += (s.wispY - h.y) * w;
+      }
+    }
+    if (fx !== 0 || fy !== 0) {
+      tx = s.wispX + fx * 4;
+      ty = s.wispY + fy * 4;
+    }
+    const p = toScreen(box, s, tx, ty);
+    await page.mouse.move(p.x, p.y);
+    await frames(page, 1);
   }
-  // charge straight at the mote's CURRENT position - full-speed rush
-  const p = toScreen(box, s, m.x, m.y);
-  await page.mouse.move(p.x, p.y);
-  await frames(page, 1);
+  fail("approach never arrived inside its frame budget");
+}
+
+// ---- 2 + 3: rush a shy mote, watch it flee and the telemetry move ----
+let home = null;
+let fled = false;
+let lastPos = null;
+let moves = 0;
+for (let attempt = 1; attempt <= 10 && !fled; attempt += 1) {
+  s = await state(page);
+  let target = pickShy(s);
+  // Clearance is transient - patrols sweep past every mote; wait for a window.
+  for (let w = 0; w < 40 && !target; w += 1) {
+    await frames(page, 6);
+    s = await state(page);
+    target = pickShy(s);
+  }
+  if (!target) fail("no hazard-clear shy mote inside the wait budget");
+  home = { x: target.x, y: target.y };
+  log(`attempt ${attempt}: approaching shy mote at (${home.x},${home.y}), then rushing it`);
+  if (!(await approach(page, box, home.x, home.y, 240))) {
+    log("snuffed on the approach - retrying like a player would");
+    continue;
+  }
+  lastPos = { ...home };
+  moves = 0;
+  const resets0 = (await state(page)).resets;
+  let snuffed = false;
+  for (let f = 0; f < 300 && !fled && !snuffed; f += 1) {
+    s = await state(page);
+    if (!s || s.scene !== "level") fail("scene changed mid-rush");
+    if (s.resets > resets0) { snuffed = true; break; }
+    const m = findShyNear(s, lastPos, 140);
+    if (!m) fail("lost track of the rushed mote");
+    if (dist(m, lastPos) > 0.5) moves += 1;
+    lastPos = { x: m.x, y: m.y };
+    if (dist(m, home) > 70) {
+      fled = true;
+      break;
+    }
+    // charge straight at the mote's CURRENT position - full-speed rush
+    const p = toScreen(box, s, m.x, m.y);
+    await page.mouse.move(p.x, p.y);
+    await frames(page, 1);
+  }
+  if (snuffed) log("snuffed mid-rush - retrying like a player would");
 }
 if (!fled) fail(`shy mote never fled its home (moved-frames=${moves})`);
 log(`RUSH ok: mote fled >70px from home; telemetry moved on ${moves} distinct frames`);
@@ -120,17 +173,24 @@ await page.screenshot({ path: process.env.SHOT ?? "shy-probe-flee.png" });
 // ---- 5: keep chasing until it tires, then collect it ----
 log("chasing to exhaustion (stamina drains in ~2.4 game-seconds)...");
 let caught = false;
-const countAtChase = s.motes.length;
-for (let f = 0; f < 1600 && !caught; f += 1) {
+// Catching is judged by the SHY count dropping: grazing a normal mote
+// mid-chase must not read as a catch, and a snuff (motes respawn, count
+// restored) must re-target instead of failing.
+const shyCount0 = s.motes.filter((m) => m.shy).length;
+for (let f = 0; f < 2000 && !caught; f += 1) {
   s = await state(page);
   if (!s || s.scene !== "level") fail("scene changed mid-chase");
+  const shyNow = s.motes.filter((x) => x.shy).length;
+  if (shyNow < shyCount0) {
+    caught = true;
+    break;
+  }
   const m = findShyNear(s, lastPos, 160);
   if (!m) {
-    if (s.motes.length < countAtChase) {
-      caught = true;
-      break;
-    }
-    fail("lost track of the chased mote without a collection");
+    const re = pickShy(s);
+    if (!re) fail("lost track of every shy mote mid-chase");
+    lastPos = { x: re.x, y: re.y };
+    continue;
   }
   lastPos = { x: m.x, y: m.y };
   const p = toScreen(box, s, m.x, m.y);
@@ -139,24 +199,34 @@ for (let f = 0; f < 1600 && !caught; f += 1) {
 }
 if (!caught) fail("sustained chase never caught the shy mote - stamina/tiring may be broken");
 s = await state(page);
-log(`STAMINA ok: chased mote collected (collected=${s.collected}, remaining=${s.remaining})`);
+log(`STAMINA ok: a shy mote fell to sustained pursuit (collected=${s.collected}, remaining=${s.remaining})`);
 
 // ---- 4: calm approach on a fresh shy mote ----
 s = await state(page);
-target = pickShy(s);
-if (!target) fail("no second hazard-clear shy mote for the calm test");
-log(`calm-approaching shy mote at (${target.x},${target.y})`);
-lastPos = { x: target.x, y: target.y };
-// step 1: walk near it (this may startle it - that's fine), then park
-for (let f = 0; f < 300; f += 1) {
+let calmPick = pickShy(s);
+for (let w = 0; w < 40 && !calmPick; w += 1) {
+  await frames(page, 6);
   s = await state(page);
-  const m = findShyNear(s, lastPos, 160);
+  calmPick = pickShy(s);
+}
+if (!calmPick) fail("no second hazard-clear shy mote inside the wait budget");
+log(`calm-approaching shy mote at (${calmPick.x},${calmPick.y})`);
+lastPos = { x: calmPick.x, y: calmPick.y };
+// step 1: walk near it with avoidance (this may startle it - that's fine),
+// then park; a snuff on the way restarts the walk (motes respawn at home)
+for (let tries = 0; tries < 6; tries += 1) {
+  s = await state(page);
+  const m = findShyNear(s, lastPos, 200) ?? pickShy(s);
   if (!m) fail("calm-test mote vanished during approach");
   lastPos = { x: m.x, y: m.y };
   if (dist({ x: s.wispX, y: s.wispY }, m) < 140) break;
-  const p = toScreen(box, s, m.x, m.y);
-  await page.mouse.move(p.x, p.y);
-  await frames(page, 1);
+  if (!(await approach(page, box, m.x, m.y, 130))) {
+    log("snuffed walking to the calm-test mote - retrying");
+    s = await state(page);
+    const fresh = pickShy(s);
+    if (!fresh) fail("no shy mote left for the calm test");
+    lastPos = { x: fresh.x, y: fresh.y };
+  }
 }
 // step 2: park the cursor ON the wisp so wisp speed decays to ~0, wait out
 // the startle (0.8 game-s ~= 48 frames) plus settle margin
@@ -172,13 +242,13 @@ const calmStart = { x: calmTarget.x, y: calmTarget.y };
 lastPos = { ...calmStart };
 let calmCaught = false;
 let maxMoteMove = 0;
-const countAtCreep = s.motes.length;
+const shyAtCreep = s.motes.filter((x) => x.shy).length;
 for (let f = 0; f < 900 && !calmCaught; f += 1) {
   s = await state(page);
   if (!s || s.scene !== "level") fail("scene changed mid-creep");
   const m = findShyNear(s, lastPos, 160);
   if (!m) {
-    if (s.motes.length < countAtCreep) {
+    if (s.motes.filter((x) => x.shy).length < shyAtCreep) {
       calmCaught = true;
       break;
     }

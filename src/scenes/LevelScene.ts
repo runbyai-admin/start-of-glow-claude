@@ -82,6 +82,8 @@ interface MoteState {
   startleMs: number;
   exhausted: boolean;
   phase: number;
+  /** 1 on a fresh startle, decaying - drives a small scale pop. */
+  pop: number;
 }
 
 /** Cosmetic per-mood tint - purely a palette shift between stages, same shapes. */
@@ -126,6 +128,8 @@ export class LevelScene extends Phaser.Scene {
   private openLine!: Phaser.GameObjects.Text;
   private whisperLine!: Phaser.GameObjects.Text;
   private whisperShown = false;
+  /** Rate limit for the skitter sound - a startled cluster is one darting, not a drumroll. */
+  private lastSkitterAt = 0;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private target = new Phaser.Math.Vector2(START_X, START_Y);
 
@@ -155,6 +159,7 @@ export class LevelScene extends Phaser.Scene {
     this.flawlessNow = false;
     this.locked = false;
     this.whisperShown = false;
+    this.lastSkitterAt = 0;
     this.moteConfigs = [];
     this.motes = [];
     this.hazards = [];
@@ -376,6 +381,7 @@ export class LevelScene extends Phaser.Scene {
         startleMs: 0,
         exhausted: false,
         phase: rng.realInRange(0, Math.PI * 2),
+        pop: 0,
       });
     });
   }
@@ -818,6 +824,16 @@ export class LevelScene extends Phaser.Scene {
       const dist = Phaser.Math.Distance.Between(m.pos.x, m.pos.y, this.wisp.x, this.wisp.y);
       const near = dist <= shy.radius;
       if (near && wispSpeed > shy.rushSpeed && !m.exhausted) {
+        // A fresh startle (not the sustained one a chase keeps refreshed)
+        // gets its telegraphs: the scale pop, and - rate-limited so a
+        // startled cluster reads as one darting - the skitter sound.
+        if (m.startleMs <= 0) {
+          m.pop = 1;
+          if (timeMs - this.lastSkitterAt > 350) {
+            this.lastSkitterAt = timeMs;
+            this.ambience.skitter();
+          }
+        }
         m.startleMs = SHY_STARTLE_MS;
         if (!this.whisperShown) {
           this.whisperShown = true;
@@ -869,6 +885,8 @@ export class LevelScene extends Phaser.Scene {
       m.img.setPosition(m.pos.x, m.pos.y + bob);
       const targetAlpha = m.exhausted ? 0.55 : fleeing ? 1 : 0.88;
       m.img.alpha = Phaser.Math.Linear(m.img.alpha, targetAlpha, 1 - Math.pow(0.02, dt));
+      m.pop = Phaser.Math.Linear(m.pop, 0, 1 - Math.pow(0.005, dt));
+      m.img.setScale(0.55 + m.pop * 0.09);
     }
   }
 
