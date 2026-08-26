@@ -48,13 +48,15 @@ test("the title screen comes up with the light pipeline running", async ({ page 
 
 test("starting the game loads level 1, and the light-being follows input and collects motes", async ({ page }) => {
   // Headless rendering on this host runs the Light2D level scene at ~5fps
-  // (software rasterizer; a real browser with a GPU runs it at full rate),
-  // so input processing is frame-bound, not wall-clock-bound. The moves
-  // below pace themselves by the page's own frames, and the whole test gets
-  // a budget sized for a slow-frame environment instead of a fast one - a
-  // 120s budget proved marginal (one pass at 108s, one miss at 120s), so
-  // this is deliberately not tight.
-  test.setTimeout(180_000);
+  // alone and as low as ~1.3fps when rival contestant sessions load the
+  // shared host (measured 2026-08-26, load ~8: same build, same test, 4x
+  // slower frames - a software rasterizer splitting cores; a real browser
+  // with a GPU runs full rate). Input processing is frame-bound, not
+  // wall-clock-bound: the moves below pace themselves by the page's own
+  // frames, and the budget is sized for the CONTENDED environment, not the
+  // quiet one - 120s missed at ~5fps, 180s missed at ~1.3fps. Do not
+  // re-tighten.
+  test.setTimeout(300_000);
   const consoleErrors = collectConsoleErrors(page);
 
   await page.goto("/", { waitUntil: "domcontentloaded" });
