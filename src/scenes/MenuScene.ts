@@ -1,5 +1,11 @@
 import Phaser from "phaser";
-import { makeGlowTexture, makeSkyTexture } from "../textures";
+import {
+  makeGlowTexture,
+  makeGroundTexture,
+  makeHillsTexture,
+  makeSkyTexture,
+  makeTreeTexture,
+} from "../textures";
 import { Ambience } from "../audio";
 import { LEVELS } from "../levels";
 import { VIEW_HEIGHT, VIEW_WIDTH } from "./dimensions";
@@ -10,6 +16,12 @@ const BEST_RESETS_KEY = "start-of-glow-best-resets";
 const WISP_MAX_SPEED = 480; // same cap as LevelScene - the menu IS the game's movement
 const BEACON = { x: 1010, y: 400 };
 const BEGIN_DIST = 64;
+
+// The clearing's own pre-dawn palette - a touch colder than any level, so the
+// levels still get to feel like somewhere you went.
+const MENU_TREE_TINTS = [0x16203a, 0x1a2743, 0x141c33];
+const MENU_GROUND_TINT = 0x151b2f;
+const MENU_HILLS_TINT = 0x0e1526;
 
 /**
  * The title screen, round 2: not a screen in front of the game but the game's
@@ -22,12 +34,20 @@ const BEGIN_DIST = 64;
  * test path - and a quiet hint line fades in only if nothing has happened for
  * a while. Shares the module-singleton Ambience so audio unlocked here keeps
  * working across scenes.
+ *
+ * Round 2 extension: the clearing is a real place now, in the same idiom as
+ * the levels - silhouette trees and ground on the Light2D pipeline, so the
+ * player's own light reveals the world it is standing in; fireflies drift in
+ * the dark; the wisp *arrives* (light blooms in from nothing) rather than
+ * popping into existence; and the shell grows its first setting - `m` toggles
+ * sound, persisted, honored everywhere.
  */
 export class MenuScene extends Phaser.Scene {
   private wisp!: Phaser.GameObjects.Image;
   private wispLight!: Phaser.GameObjects.Light;
   private beacon!: Phaser.GameObjects.Image;
   private beaconLight!: Phaser.GameObjects.Light;
+  private soundLine!: Phaser.GameObjects.Text;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   private target = { x: 250, y: 480 };
   private begun = false;
@@ -42,6 +62,20 @@ export class MenuScene extends Phaser.Scene {
     makeSkyTexture(this, "sky", VIEW_WIDTH, VIEW_HEIGHT, 11);
     makeGlowTexture(this, "wisp", 85, "rgba(255,255,255,1)", "rgba(150,214,255,0.55)");
     makeGlowTexture(this, "menu-beacon", 170, "rgba(255,226,168,1)", "rgba(255,182,102,0.4)");
+    makeGlowTexture(this, "title-glow", 170, "rgba(214,232,255,0.5)", "rgba(140,180,240,0.18)");
+    makeGlowTexture(this, "firefly", 12, "rgba(226,255,196,1)", "rgba(198,255,130,0.4)");
+    // Same key + params as LevelScene's spark - the trail must match exactly.
+    makeGlowTexture(this, "spark", 16, "rgba(255,255,255,0.9)", "rgba(190,226,255,0.35)");
+    // Menu-sized world pieces. The level's "ground"/"hills" keys are wider
+    // textures - makeCanvasTexture returns early on an existing key, so a
+    // shared key here would hand the levels a half-width world. Distinct keys.
+    makeHillsTexture(this, "menu-hills", 1400, 260, 3);
+    makeGroundTexture(this, "menu-ground", VIEW_WIDTH, 220, 5);
+    // Same dims and seeds as LevelScene's trees - shared on purpose: identical
+    // silhouettes, and the level's preload finds them already made.
+    for (let i = 0; i < 4; i += 1) {
+      makeTreeTexture(this, `tree-${i}`, 240, 560, i + 1);
+    }
   }
 
   create(): void {
@@ -52,7 +86,7 @@ export class MenuScene extends Phaser.Scene {
     this.idleMs = 0;
     this.target = { x: 250, y: 480 };
 
-    this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setDepth(-100);
+    this.buildClearing();
 
     // The beacon: the destination that is also the start button.
     this.beacon = this.add
@@ -72,12 +106,57 @@ export class MenuScene extends Phaser.Scene {
       ease: "Sine.easeInOut",
     });
 
+    // The wisp arrives: the sprite and its light bloom in from nearly nothing,
+    // the same reveal gesture the whole game is built on, played first here.
+    // It wears the same spark trail as in the levels - it IS the same being,
+    // and the menu teaching only holds if nothing about it changes at start.
+    const trail = this.add.particles(0, 0, "spark", {
+      speed: { min: 6, max: 30 },
+      lifespan: { min: 500, max: 1100 },
+      scale: { start: 0.6, end: 0 },
+      alpha: { start: 0.55, end: 0 },
+      tint: [0xffffff, 0x9fd8ff, 0xffe6a8],
+      blendMode: Phaser.BlendModes.ADD,
+      frequency: 40,
+      quantity: 1,
+      emitZone: { type: "random", source: new Phaser.Geom.Circle(0, 0, 19), quantity: 1 },
+    });
+    trail.setDepth(9);
     this.wisp = this.add
       .image(this.target.x, this.target.y, "wisp")
       .setBlendMode(Phaser.BlendModes.ADD)
       .setScale(0.62)
+      .setAlpha(0)
       .setDepth(10);
-    this.wispLight = this.lights.addLight(this.wisp.x, this.wisp.y, 420, 0xbfe4ff, 1.7);
+    trail.startFollow(this.wisp);
+    this.wispLight = this.lights.addLight(this.wisp.x, this.wisp.y, 90, 0xbfe4ff, 0.25);
+    this.tweens.add({ targets: this.wisp, alpha: 1, duration: 1100, ease: "Sine.easeOut" });
+    this.tweens.add({
+      targets: this.wispLight,
+      radius: 420,
+      intensity: 1.7,
+      duration: 1500,
+      ease: "Sine.easeOut",
+    });
+
+    // A soft cool halo behind the title, breathing slowly - the words sit in
+    // the world's light instead of floating over it.
+    const halo = this.add
+      .image(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.3, "title-glow")
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setScale(3.2, 1.05)
+      .setAlpha(0)
+      .setDepth(19);
+    this.tweens.add({ targets: halo, alpha: 0.16, duration: 2000, delay: 500, ease: "Sine.easeOut" });
+    this.tweens.add({
+      targets: halo,
+      scaleX: 3.45,
+      duration: 3800,
+      delay: 2500,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
 
     const title = this.add
       .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.3, "START OF GLOW", {
@@ -89,7 +168,7 @@ export class MenuScene extends Phaser.Scene {
       .setOrigin(0.5)
       .setAlpha(0)
       .setDepth(20);
-    this.tweens.add({ targets: title, alpha: 1, duration: 1400, ease: "Sine.easeOut" });
+    this.tweens.add({ targets: title, alpha: 1, duration: 1400, delay: 400, ease: "Sine.easeOut" });
 
     // A returning player's best run, discovered rather than announced.
     const best = this.readBest();
@@ -103,8 +182,20 @@ export class MenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setAlpha(0)
         .setDepth(20);
-      this.tweens.add({ targets: bestLine, alpha: 0.55, duration: 1400, delay: 900, ease: "Sine.easeOut" });
+      this.tweens.add({ targets: bestLine, alpha: 0.55, duration: 1400, delay: 1100, ease: "Sine.easeOut" });
     }
+
+    // The shell's first setting: sound, toggled with one key, remembered.
+    this.soundLine = this.add
+      .text(VIEW_WIDTH - 24, VIEW_HEIGHT - 20, this.soundLabel(), {
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "12px",
+        color: "#63769a",
+      })
+      .setOrigin(1, 1)
+      .setAlpha(0)
+      .setDepth(20);
+    this.tweens.add({ targets: this.soundLine, alpha: 0.5, duration: 1400, delay: 1400, ease: "Sine.easeOut" });
 
     this.cursors = this.input.keyboard!.createCursorKeys();
 
@@ -124,11 +215,86 @@ export class MenuScene extends Phaser.Scene {
       ambience.unlock();
       this.idleMs = 0;
       if (ev.key === "Enter" || ev.key === " ") this.begin();
+      if (ev.key === "m" || ev.key === "M") {
+        ambience.toggleMuted();
+        this.soundLine.setText(this.soundLabel());
+      }
     });
 
     this.events.once(Phaser.Scenes.Events.POST_UPDATE, () => {
       document.body.dataset.gameReady = "true";
     });
+  }
+
+  /**
+   * The clearing itself - the same world idiom as the levels (silhouettes on
+   * the Light2D pipeline, lit by the player's own glow), composed for one
+   * fixed frame: a stand of trees on the left where the wisp wakes, an open
+   * middle for the title, the treeline thinning toward the beacon.
+   */
+  private buildClearing(): void {
+    this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setDepth(-100);
+
+    this.add.image(-40, 570, "menu-hills").setOrigin(0, 1).setTint(MENU_HILLS_TINT).setDepth(-40);
+
+    const trees: Array<{ x: number; scale: number; tex: number; tint: number }> = [
+      { x: 88, scale: 1.18, tex: 0, tint: 0 },
+      { x: 218, scale: 0.92, tex: 2, tint: 1 },
+      { x: 338, scale: 1.06, tex: 1, tint: 2 },
+      { x: 585, scale: 0.78, tex: 3, tint: 1 },
+      { x: 1168, scale: 1.12, tex: 3, tint: 0 },
+      { x: 1262, scale: 0.9, tex: 0, tint: 2 },
+    ];
+    for (const t of trees) {
+      this.add
+        .image(t.x, 604, `tree-${t.tex}`)
+        .setOrigin(0.5, 1)
+        .setScale(t.scale)
+        .setTint(MENU_TREE_TINTS[t.tint])
+        .setDepth(-30)
+        .setPipeline("Light2D");
+    }
+
+    this.add
+      .image(0, VIEW_HEIGHT, "menu-ground")
+      .setOrigin(0, 1)
+      .setTint(MENU_GROUND_TINT)
+      .setDepth(-10)
+      .setPipeline("Light2D");
+
+    const rng = new Phaser.Math.RandomDataGenerator(["start-of-glow-menu-fireflies"]);
+    for (let i = 0; i < 7; i += 1) {
+      const startX = rng.between(60, VIEW_WIDTH - 60);
+      const startY = rng.between(200, VIEW_HEIGHT - 130);
+      const firefly = this.add
+        .image(startX, startY, "firefly")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setScale(rng.realInRange(0.5, 1))
+        .setAlpha(rng.realInRange(0.3, 0.7))
+        .setDepth(-5);
+      this.tweens.add({
+        targets: firefly,
+        x: startX + rng.between(-70, 70),
+        y: startY + rng.between(-50, 50),
+        duration: rng.between(3600, 6200),
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+      this.tweens.add({
+        targets: firefly,
+        alpha: { from: firefly.alpha * 0.4, to: firefly.alpha },
+        duration: rng.between(900, 1700),
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+        delay: rng.between(0, 800),
+      });
+    }
+  }
+
+  private soundLabel(): string {
+    return ambience.isMuted() ? "m · sound off" : "m · sound on";
   }
 
   update(time: number, delta: number): void {
@@ -161,7 +327,11 @@ export class MenuScene extends Phaser.Scene {
     this.wisp.y += dy;
 
     const breathe = Math.sin(time * 0.0009) * 0.25;
-    this.wispLight.intensity = 1.7 + breathe;
+    // Only breathe once the entrance bloom has finished - fighting the
+    // arrival tween for the same value would stutter it.
+    if (!this.tweens.isTweening(this.wispLight)) {
+      this.wispLight.intensity = 1.7 + breathe;
+    }
     this.wispLight.setPosition(this.wisp.x, this.wisp.y);
 
     // Arriving at the beacon IS pressing start.

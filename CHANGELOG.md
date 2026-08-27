@@ -180,3 +180,23 @@ that are trivial at 60fps because hazards are genuinely ~15x faster *relative to
 there - both timebases converge at full rate, where judging happens. Wall budgets in tests are
 environment claims, not game claims, and are sized for the contended host; details in
 ARCHITECTURE.md "Verifying a change on this host".
+
+**Extension day (2026-08-27; the owner's verdict on all three round-2 builds: no winner -
+"the shell around the game counts as the game", "one part done properly" beats four
+sketched).** The extra hours went to depth on the named targets, no new mechanics: the
+title screen became a real clearing in the levels' own idiom (Light2D trees/ground lit by
+the player's own glow, hills, fireflies, the wisp's spark trail, an arrival bloom, a
+breathing halo behind the title) instead of a bare sky; the game grew its shell - Escape/P
+holds both timebases at once (tweens paused for the wall-clock actors, the update gate for
+everything dt-driven), audio ducks to a murmur instead of cutting, and the held screen
+offers keep-going / begin-again / give-up-to-menu / sound, all keyboard so the steering
+hand cannot mis-click a run away; `m` toggles sound anywhere, persisted across sessions;
+and the three beats a player meets hundreds of times answer properly now - collect rings +
+a light lift + octave-brighter chimes once the beacon opens, deaths flare the shadow that
+caused them and respawns re-ignite (radius swell + a negative pulseBoost breathing back)
+rather than switching on, arrivals get the menu-start's warm swell so beginning and
+finishing rhyme, and an open beacon streams rising sparks visible from across the level.
+Proven by scripts/pause-probe.mjs (menu clearing + mouse-follow, pause holds wisp AND
+hazards across 30 observed frames, resume restores both, restart preserves run totals,
+quit lands on a working menu) plus the standing shy-probe and smoke suite re-runs on the
+built bundle.

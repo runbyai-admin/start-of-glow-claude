@@ -111,6 +111,7 @@ export class LevelScene extends Phaser.Scene {
   private wispLight!: Phaser.GameObjects.Light;
   private beacon!: Phaser.GameObjects.Image;
   private beaconLight!: Phaser.GameObjects.Light;
+  private beaconShimmer!: Phaser.GameObjects.Particles.ParticleEmitter;
   private trail!: Phaser.GameObjects.Particles.ParticleEmitter;
   private hazardTrail!: Phaser.GameObjects.Particles.ParticleEmitter;
 
@@ -142,6 +143,10 @@ export class LevelScene extends Phaser.Scene {
   private flawlessNow = false;
   private locked = false;
   private graceUntil = 0;
+  private paused = false;
+  private pausedAtMs = 0;
+  private pauseUi: Phaser.GameObjects.GameObject[] = [];
+  private pauseSoundLine: Phaser.GameObjects.Text | null = null;
 
   constructor() {
     super("level");
@@ -158,6 +163,10 @@ export class LevelScene extends Phaser.Scene {
     this.levelClear = false;
     this.flawlessNow = false;
     this.locked = false;
+    this.paused = false;
+    this.pausedAtMs = 0;
+    this.pauseUi = [];
+    this.pauseSoundLine = null;
     this.whisperShown = false;
     this.lastSkitterAt = 0;
     this.moteConfigs = [];
@@ -245,6 +254,24 @@ export class LevelScene extends Phaser.Scene {
   private buildBeacon(): void {
     this.beacon = this.add.image(BEACON_X, BEACON_Y, "beacon").setBlendMode(Phaser.BlendModes.ADD).setDepth(-35).setAlpha(0.05);
     this.beaconLight = this.lights.addLight(BEACON_X, BEACON_Y, 260, 0xffcf8a, 0);
+    // The invitation, made visible: once the beacon opens, warm sparks rise
+    // from it - legible from across the level the way the light alone is not.
+    // Deliberately NOT held by the pause (like the storm flecks, it is the
+    // world's set dressing, and a held world still glows).
+    this.beaconShimmer = this.add.particles(BEACON_X, BEACON_Y + 20, "spark", {
+      speedY: { min: -44, max: -14 },
+      speedX: { min: -9, max: 9 },
+      lifespan: { min: 1200, max: 2200 },
+      scale: { start: 0.5, end: 0 },
+      alpha: { start: 0.4, end: 0 },
+      tint: [0xffd9a0, 0xffe9c0, 0xfff2dc],
+      blendMode: Phaser.BlendModes.ADD,
+      frequency: 130,
+      quantity: 1,
+      emitZone: { type: "random", source: new Phaser.Geom.Circle(0, 0, 26), quantity: 1 },
+      emitting: false,
+    });
+    this.beaconShimmer.setDepth(-34);
   }
 
   private buildFireflies(): void {
@@ -675,16 +702,134 @@ export class LevelScene extends Phaser.Scene {
 
   private bindInput(): void {
     this.input.on(Phaser.Input.Events.POINTER_MOVE, (pointer: Phaser.Input.Pointer) => {
-      if (this.locked) return;
+      if (this.locked || this.paused) return;
       this.target.set(pointer.worldX, pointer.worldY);
     });
     this.input.on(Phaser.Input.Events.POINTER_DOWN, (pointer: Phaser.Input.Pointer) => {
       this.ambience.unlock();
-      if (this.locked) return;
+      if (this.locked || this.paused) return;
       this.target.set(pointer.worldX, pointer.worldY);
       this.pulse();
     });
+    this.input.keyboard!.on("keydown", this.onKey, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.input.keyboard?.off("keydown", this.onKey, this);
+    });
     this.cursors = this.input.keyboard!.createCursorKeys();
+  }
+
+  /**
+   * The shell around the moment-to-moment game (round 2 extension): Escape or
+   * P holds the world - both timebases at once, tweens paused for the
+   * wall-clock actors (hazard patrols, fireflies) and the update() gate for
+   * everything dt-driven - while the mix ducks to a distant murmur instead of
+   * cutting dead. The held screen offers the three honest exits and the sound
+   * toggle, all keyboard: the mouse is the wisp's hand, and a menu you could
+   * mis-click while steering would cost a run.
+   */
+  private onKey(ev: KeyboardEvent): void {
+    if (ev.key === "Escape" || ev.key === "p" || ev.key === "P") {
+      if (this.paused) this.resumeGame();
+      else if (!this.locked) this.pauseGame();
+      return;
+    }
+    if (!this.paused) return;
+    if (ev.key === "r" || ev.key === "R") this.restartLevel();
+    else if (ev.key === "q" || ev.key === "Q") this.quitToMenu();
+    else if (ev.key === "m" || ev.key === "M") {
+      this.ambience.toggleMuted();
+      this.pauseSoundLine?.setText(this.soundLabel());
+    }
+  }
+
+  private soundLabel(): string {
+    return this.ambience.isMuted() ? "m · sound off" : "m · sound on";
+  }
+
+  private pauseGame(): void {
+    this.paused = true;
+    this.pausedAtMs = this.time.now;
+    this.tweens.pauseAll();
+    this.trail.emitting = false;
+    this.ambience.setDucked(true);
+    this.buildPauseUi();
+  }
+
+  private resumeGame(): void {
+    if (!this.paused) return;
+    // The grace window is wall-time; time spent held should not eat it.
+    const heldMs = this.time.now - this.pausedAtMs;
+    if (this.graceUntil > this.pausedAtMs) this.graceUntil += heldMs;
+    this.tweens.resumeAll();
+    this.trail.emitting = true;
+    this.ambience.setDucked(false);
+    for (const o of this.pauseUi) o.destroy();
+    this.pauseUi = [];
+    this.pauseSoundLine = null;
+    this.paused = false;
+  }
+
+  /** Static objects only - tweens.pauseAll() is already holding the world, so the overlay animates nothing. */
+  private buildPauseUi(): void {
+    const dim = this.add
+      .rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, VIEW_WIDTH, VIEW_HEIGHT, 0x04050a, 0.62)
+      .setScrollFactor(0)
+      .setDepth(200);
+    const title = this.add
+      .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.36, "held", {
+        fontFamily: "Georgia, 'Times New Roman', serif",
+        fontSize: "34px",
+        color: "#e7dcc2",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.92)
+      .setDepth(201)
+      .setScrollFactor(0);
+    const lines: Array<[string, number]> = [
+      ["esc · keep going", 0.5],
+      ["r · begin this level again", 0.555],
+      ["q · give up to the menu", 0.61],
+    ];
+    const texts = lines.map(([label, fy]) =>
+      this.add
+        .text(VIEW_WIDTH / 2, VIEW_HEIGHT * fy, label, {
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "15px",
+          color: "#7e93b8",
+        })
+        .setOrigin(0.5)
+        .setAlpha(0.85)
+        .setDepth(201)
+        .setScrollFactor(0),
+    );
+    this.pauseSoundLine = this.add
+      .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.665, this.soundLabel(), {
+        fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize: "15px",
+        color: "#7e93b8",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0.85)
+      .setDepth(201)
+      .setScrollFactor(0);
+    this.pauseUi = [dim, title, ...texts, this.pauseSoundLine];
+  }
+
+  /** Same contract as a fail, minus the death: this attempt starts over, run totals stay. */
+  private restartLevel(): void {
+    this.ambience.setDucked(false);
+    this.scene.restart({
+      levelIndex: this.config.index,
+      ambience: this.ambience,
+      resets: this.resets,
+      flawless: this.flawlessLevels,
+    });
+  }
+
+  private quitToMenu(): void {
+    this.ambience.setDucked(false);
+    this.ambience.setStorm(false);
+    this.scene.start("menu");
   }
 
   private pulse(): void {
@@ -697,7 +842,7 @@ export class LevelScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number): void {
-    if (this.locked) return;
+    if (this.locked || this.paused) return;
 
     const dt = delta / 1000;
     const step = dt * WISP_MAX_SPEED;
@@ -893,7 +1038,7 @@ export class LevelScene extends Phaser.Scene {
   private checkHazardCollisions(): void {
     for (const h of this.hazards) {
       if (Phaser.Math.Distance.Between(h.img.x, h.img.y, this.wisp.x, this.wisp.y) <= HAZARD_RADIUS) {
-        this.fail();
+        this.fail(h);
         return;
       }
     }
@@ -906,9 +1051,27 @@ export class LevelScene extends Phaser.Scene {
       this.motes.splice(i, 1);
       this.tweens.killTweensOf(mote.img);
       this.trail.explode(18, mote.img.x, mote.img.y);
+      // The pickup answers in light as well as sound: a ring of the mote's own
+      // glow swells and fades where it stood, and the wisp's light lifts for a
+      // beat (through the same pulseBoost the pointer-press uses, so the two
+      // never fight over the light's intensity).
+      const ring = this.add
+        .image(mote.img.x, mote.img.y, mote.shy ? "mote-shy" : "mote")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setDepth(8)
+        .setAlpha(0.5);
+      this.tweens.add({
+        targets: ring,
+        scale: 2.7,
+        alpha: 0,
+        duration: 330,
+        ease: "Quad.easeOut",
+        onComplete: () => ring.destroy(),
+      });
       mote.img.destroy();
       this.collected += 1;
-      this.ambience.chime(this.collected);
+      this.pulseBoost = Math.max(this.pulseBoost, 1.1);
+      this.ambience.chime(this.collected, this.levelClear);
       this.grow();
     }
   }
@@ -919,6 +1082,9 @@ export class LevelScene extends Phaser.Scene {
   }
 
   private grow(): void {
+    // A collect completes any re-ignition still in flight - the direct radius
+    // write below must not be overwritten by a running tween's next step.
+    this.tweens.killTweensOf(this.wispLight);
     this.wispLight.radius = 347 + this.collected * 20;
     this.wisp.setScale(0.5 + this.collected * 0.018);
 
@@ -935,6 +1101,7 @@ export class LevelScene extends Phaser.Scene {
       this.ambience.beaconOpen();
       this.showOpenLine();
       this.beaconPulse(1.12);
+      this.beaconShimmer.start();
     }
 
     if (this.collected >= this.totalMotes && !this.flawlessNow) {
@@ -943,6 +1110,7 @@ export class LevelScene extends Phaser.Scene {
       this.beaconLight.intensity = 2.2;
       this.beaconLight.setColor(0xffe9c0);
       this.beaconPulse(1.2);
+      this.beaconShimmer.setFrequency(70, 1);
     }
 
     this.updateHud();
@@ -997,12 +1165,32 @@ export class LevelScene extends Phaser.Scene {
     this.tweens.add({ targets: {}, duration: ms, onComplete });
   }
 
-  private fail(): void {
+  private fail(hazard?: { img: Phaser.GameObjects.Image; light: Phaser.GameObjects.Light }): void {
     this.locked = true;
     this.resets += 1;
     this.ambience.hit();
     this.cameras.main.flash(220, 40, 10, 60);
     this.cameras.main.shake(220, 0.006);
+
+    // The shadow that took the light answers for it: its cold glow flares for
+    // a breath, so the player's eye lands on WHAT caught them, not just that
+    // something did.
+    if (hazard) {
+      this.tweens.add({
+        targets: hazard.light,
+        intensity: 3.0,
+        duration: 130,
+        yoyo: true,
+        ease: "Quad.easeOut",
+      });
+      this.tweens.add({
+        targets: hazard.img,
+        scale: hazard.img.scale * 1.22,
+        duration: 130,
+        yoyo: true,
+        ease: "Quad.easeOut",
+      });
+    }
 
     this.tweens.add({
       targets: this.wispLight,
@@ -1018,16 +1206,28 @@ export class LevelScene extends Phaser.Scene {
       this.wisp.setPosition(START_X, START_Y);
       this.wispLight.setPosition(START_X, START_Y);
       this.wisp.setScale(0.5);
-      // Restore the light itself too - the snuff tween shrank its radius, and
-      // nothing else resets it until the next collect. A respawned light
-      // should match a fresh spawn at zero motes, not stay snuffed-small.
+      // Restore the light itself - but as a re-ignition, not a light switch:
+      // the radius swells back over half a second, and intensity climbs back
+      // through the same pulseBoost channel update() already decays toward
+      // zero (a negative boost is a dimness that breathes back to full, with
+      // no second writer fighting update()'s per-frame intensity math).
       this.tweens.killTweensOf(this.wispLight);
-      this.wispLight.radius = 347;
       this.wispLight.intensity = this.baseIntensity();
+      this.wispLight.radius = 130;
+      this.tweens.add({
+        targets: this.wispLight,
+        radius: 347,
+        duration: 550,
+        ease: "Sine.easeOut",
+      });
+      this.pulseBoost = -1.15;
       this.collected = 0;
       this.levelClear = false;
       this.flawlessNow = false;
       this.beacon.setAlpha(0.05);
+      this.beaconShimmer.stop();
+      this.beaconShimmer.killAll();
+      this.beaconShimmer.setFrequency(130, 1);
       this.beaconLight.intensity = 0;
       this.beaconLight.setColor(0xffcf8a);
       this.tweens.killTweensOf(this.beacon);
@@ -1047,6 +1247,11 @@ export class LevelScene extends Phaser.Scene {
     const wasFlawless = this.collected >= this.totalMotes;
     const flawless = this.flawlessLevels + (wasFlawless ? 1 : 0);
     this.ambience.levelComplete(wasFlawless);
+    // The beacon answers the arrival - the same swell the menu's beacon gives
+    // the start, so beginning and finishing rhyme.
+    this.tweens.killTweensOf(this.beacon);
+    this.tweens.add({ targets: this.beacon, alpha: 1, scale: 1.5, duration: 420, ease: "Sine.easeOut" });
+    this.tweens.add({ targets: this.beaconLight, intensity: 3.4, radius: 640, duration: 420, ease: "Sine.easeOut" });
     this.cameras.main.flash(280, 255, 232, 190);
     this.cameras.main.fadeOut(520, 8, 7, 14);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {

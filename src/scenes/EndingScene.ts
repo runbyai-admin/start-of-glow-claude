@@ -166,7 +166,20 @@ export class EndingScene extends Phaser.Scene {
       duration: 3600,
       onComplete: () => {
         this.input.once(Phaser.Input.Events.POINTER_DOWN, () => this.restart());
-        this.input.keyboard!.once("keydown", () => this.restart());
+        // Any key begins again - except the shell's sound toggle, which keeps
+        // meaning what it means everywhere else.
+        const onKey = (ev: KeyboardEvent) => {
+          if (ev.key === "m" || ev.key === "M") {
+            this.ambience.toggleMuted();
+            return;
+          }
+          this.input.keyboard?.off("keydown", onKey);
+          this.restart();
+        };
+        this.input.keyboard!.on("keydown", onKey);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+          this.input.keyboard?.off("keydown", onKey);
+        });
       },
     });
 

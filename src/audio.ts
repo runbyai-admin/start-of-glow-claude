@@ -13,6 +13,9 @@ interface WebkitWindow extends Window {
   webkitAudioContext?: typeof AudioContext;
 }
 
+const MUTED_KEY = "start-of-glow-muted";
+const MASTER_LEVEL = 0.5;
+
 export class Ambience {
   private ctx: AudioContext | null = null;
   private master: GainNode | null = null;
@@ -20,6 +23,17 @@ export class Ambience {
   private stormDesired = false;
   private stormGain: GainNode | null = null;
   private stormLfoGain: GainNode | null = null;
+  private muted = false;
+  private ducked = false;
+
+  constructor() {
+    // The choice survives reloads; a blocked localStorage just means default-on.
+    try {
+      this.muted = window.localStorage.getItem(MUTED_KEY) === "1";
+    } catch {
+      this.muted = false;
+    }
+  }
 
   unlock(): void {
     if (this.unlocked) return;
@@ -30,7 +44,7 @@ export class Ambience {
       if (!Ctx) return;
       const ctx = new Ctx();
       const master = ctx.createGain();
-      master.gain.value = 0.5;
+      master.gain.value = this.targetMasterGain();
       master.connect(ctx.destination);
       this.ctx = ctx;
       this.master = master;
@@ -39,6 +53,48 @@ export class Ambience {
     } catch {
       this.ctx = null;
       this.master = null;
+    }
+  }
+
+  isMuted(): boolean {
+    return this.muted;
+  }
+
+  /** Flip sound on/off (the menu's and pause overlay's `m`). Persisted. */
+  toggleMuted(): boolean {
+    this.muted = !this.muted;
+    try {
+      window.localStorage.setItem(MUTED_KEY, this.muted ? "1" : "0");
+    } catch {
+      /* the toggle still works for this session */
+    }
+    this.applyMasterGain(0.08);
+    return this.muted;
+  }
+
+  /**
+   * While the game is paused the world should sound held, not dead: the whole
+   * mix sinks to a distant murmur instead of cutting out.
+   */
+  setDucked(on: boolean): void {
+    this.ducked = on;
+    this.applyMasterGain(0.25);
+  }
+
+  private targetMasterGain(): number {
+    if (this.muted) return 0;
+    return this.ducked ? MASTER_LEVEL * 0.22 : MASTER_LEVEL;
+  }
+
+  private applyMasterGain(rampSeconds: number): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const now = this.ctx.currentTime;
+      this.master.gain.cancelScheduledValues(now);
+      this.master.gain.setValueAtTime(this.master.gain.value, now);
+      this.master.gain.linearRampToValueAtTime(this.targetMasterGain(), now + rampSeconds);
+    } catch {
+      /* volume is atmosphere, never an error */
     }
   }
 
@@ -82,8 +138,12 @@ export class Ambience {
     }
   }
 
-  /** A short bell, pitch stepping through a small pentatonic set per pickup. */
-  chime(step: number): void {
+  /**
+   * A short bell, pitch stepping through a small pentatonic set per pickup.
+   * Once the beacon is open (`bright`), every chime carries an extra octave
+   * shimmer - progress you can hear without reading the HUD.
+   */
+  chime(step: number, bright = false): void {
     if (!this.ctx || !this.master) return;
     try {
       const ctx = this.ctx;
@@ -105,7 +165,7 @@ export class Ambience {
       partial.frequency.value = freq * 2;
       const partialGain = ctx.createGain();
       partialGain.gain.setValueAtTime(0.0001, now);
-      partialGain.gain.linearRampToValueAtTime(0.05, now + 0.02);
+      partialGain.gain.linearRampToValueAtTime(bright ? 0.09 : 0.05, now + 0.02);
       partialGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.6);
 
       body.connect(bodyGain);
@@ -117,6 +177,20 @@ export class Ambience {
       body.stop(now + 0.95);
       partial.start(now);
       partial.stop(now + 0.65);
+
+      if (bright) {
+        const sparkle = ctx.createOscillator();
+        sparkle.type = "sine";
+        sparkle.frequency.value = freq * 4;
+        const sparkleGain = ctx.createGain();
+        sparkleGain.gain.setValueAtTime(0.0001, now + 0.03);
+        sparkleGain.gain.linearRampToValueAtTime(0.035, now + 0.06);
+        sparkleGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
+        sparkle.connect(sparkleGain);
+        sparkleGain.connect(master);
+        sparkle.start(now + 0.03);
+        sparkle.stop(now + 0.5);
+      }
     } catch {
       /* a missed chime is not a game-breaking error */
     }
