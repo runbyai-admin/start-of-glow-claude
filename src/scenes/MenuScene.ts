@@ -399,6 +399,10 @@ export class MenuScene extends Phaser.Scene {
     this.begun = true;
     ambience.unlock();
     ambience.setGlide(0);
+    // The beacon answers in sound as well as light - the same soft two-note
+    // call a level's beacon makes when it opens. Beginning speaks the same
+    // language as every later invitation.
+    ambience.beaconOpen();
     // The beacon answers before the cut - same warm swell the levels use.
     this.tweens.add({ targets: this.beacon, alpha: 1, scale: 1.35, duration: 340, ease: "Sine.easeOut" });
     this.tweens.add({ targets: this.beaconLight, intensity: 3.2, radius: 700, duration: 340, ease: "Sine.easeOut" });
