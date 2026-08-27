@@ -200,3 +200,8 @@ Proven by scripts/pause-probe.mjs (menu clearing + mouse-follow, pause holds wis
 hazards across 30 observed frames, resume restores both, restart preserves run totals,
 quit lands on a working menu) plus the standing shy-probe and smoke suite re-runs on the
 built bundle.
+
+**Extension day, later pass:** movement got its sound - a bandpassed noise glide whose gain
+and color follow the wisp's speed (square curve: creeping is silent, rushing is heard - the
+shy rule told in sound), fed per frame by level and menu alike, zeroed on pause/fail/
+completion/scene handoff. See ARCHITECTURE.md "Moment-to-moment feedback".

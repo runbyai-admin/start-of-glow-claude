@@ -325,6 +325,8 @@ export class MenuScene extends Phaser.Scene {
     }
     this.wisp.x += dx;
     this.wisp.y += dy;
+    // The glide is audible here too - the menu must FEEL (and sound) like the game.
+    ambience.setGlide((dt > 0 ? Math.sqrt(dx * dx + dy * dy) / dt : 0) / WISP_MAX_SPEED);
 
     const breathe = Math.sin(time * 0.0009) * 0.25;
     // Only breathe once the entrance bloom has finished - fighting the
@@ -396,6 +398,7 @@ export class MenuScene extends Phaser.Scene {
     if (this.begun) return;
     this.begun = true;
     ambience.unlock();
+    ambience.setGlide(0);
     // The beacon answers before the cut - same warm swell the levels use.
     this.tweens.add({ targets: this.beacon, alpha: 1, scale: 1.35, duration: 340, ease: "Sine.easeOut" });
     this.tweens.add({ targets: this.beaconLight, intensity: 3.2, radius: 700, duration: 340, ease: "Sine.easeOut" });

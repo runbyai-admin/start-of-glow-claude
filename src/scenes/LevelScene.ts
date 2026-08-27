@@ -751,6 +751,7 @@ export class LevelScene extends Phaser.Scene {
     this.pausedAtMs = this.time.now;
     this.tweens.pauseAll();
     this.trail.emitting = false;
+    this.ambience.setGlide(0);
     this.ambience.setDucked(true);
     this.buildPauseUi();
   }
@@ -880,6 +881,7 @@ export class LevelScene extends Phaser.Scene {
     // react to. Player motion only (post-cap), measured before wind: the storm
     // moving you is not you rushing anyone.
     const wispSpeed = dt > 0 ? Math.sqrt(dx * dx + dy * dy) / dt : 0;
+    this.ambience.setGlide(wispSpeed / WISP_MAX_SPEED);
 
     // Wind (round 2): a current pushes the wisp AND its chase target, so the
     // drift is real displacement, not a nudge the trailing ease immediately
@@ -1168,6 +1170,7 @@ export class LevelScene extends Phaser.Scene {
   private fail(hazard?: { img: Phaser.GameObjects.Image; light: Phaser.GameObjects.Light }): void {
     this.locked = true;
     this.resets += 1;
+    this.ambience.setGlide(0);
     this.ambience.hit();
     this.cameras.main.flash(220, 40, 10, 60);
     this.cameras.main.shake(220, 0.006);
@@ -1246,6 +1249,7 @@ export class LevelScene extends Phaser.Scene {
     this.locked = true;
     const wasFlawless = this.collected >= this.totalMotes;
     const flawless = this.flawlessLevels + (wasFlawless ? 1 : 0);
+    this.ambience.setGlide(0);
     this.ambience.levelComplete(wasFlawless);
     // The beacon answers the arrival - the same swell the menu's beacon gives
     // the start, so beginning and finishing rhyme.

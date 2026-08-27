@@ -23,6 +23,8 @@ export class Ambience {
   private stormDesired = false;
   private stormGain: GainNode | null = null;
   private stormLfoGain: GainNode | null = null;
+  private glideGain: GainNode | null = null;
+  private glideFilter: BiquadFilterNode | null = null;
   private muted = false;
   private ducked = false;
 
@@ -358,6 +360,50 @@ export class Ambience {
   setStorm(on: boolean): void {
     this.stormDesired = on;
     this.applyStorm();
+  }
+
+  /**
+   * The sound of moving: a soft, bandpassed breath of noise whose level and
+   * color follow the wisp's own speed. Fed per frame with speed01 in [0,1];
+   * setTargetAtTime smooths toward the target, so a 5fps caller and a 60fps
+   * caller settle in the same place. The square curve keeps a stalking creep
+   * genuinely silent - rushing is what you hear, which is also the shy rule
+   * told in sound.
+   */
+  setGlide(speed01: number): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      if (!this.glideGain) {
+        const size = Math.floor(ctx.sampleRate * 2);
+        const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < size; i += 1) {
+          data[i] = Math.random() * 2 - 1;
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        const filter = ctx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = 900;
+        filter.Q.value = 0.9;
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(this.master);
+        src.start();
+        this.glideGain = gain;
+        this.glideFilter = filter;
+      }
+      const now = ctx.currentTime;
+      const s = Math.min(Math.max(speed01, 0), 1);
+      this.glideGain.gain.setTargetAtTime(0.035 * s * s, now, 0.12);
+      this.glideFilter!.frequency.setTargetAtTime(700 + 700 * s, now, 0.2);
+    } catch {
+      /* atmosphere only */
+    }
   }
 
   private applyStorm(): void {
