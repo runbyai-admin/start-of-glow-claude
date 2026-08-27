@@ -205,3 +205,11 @@ built bundle.
 and color follow the wisp's speed (square curve: creeping is silent, rushing is heard - the
 shy rule told in sound), fed per frame by level and menu alike, zeroed on pause/fail/
 completion/scene handoff. See ARCHITECTURE.md "Moment-to-moment feedback".
+
+**Extension day, shipped-final:** index-v9CHJlIz.js live in the slot (hash-verified).
+round2-gate PASSED against the DEPLOYED SLOT itself (SKIP_L1 split; one unbroken session,
+zero page errors): menu mouse-only start, L2 18/6/13 beaten vs shy motes, L3 winds + three
+deliberate deaths all recovering clean + storm played through, ending, restart, second run
+with entry tween census EXACTLY a cold start's (39=39; ~40 recovered deaths, zero residue).
+pause-probe PASSED against the live final build (menu clearing, both-timebase hold, restart
+preserves totals, quit works). Evidence: test-results/round2-gate/gate-0827-vs-live-slot.log.
