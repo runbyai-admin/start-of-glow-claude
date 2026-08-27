@@ -213,3 +213,14 @@ deliberate deaths all recovering clean + storm played through, ending, restart, 
 with entry tween census EXACTLY a cold start's (39=39; ~40 recovered deaths, zero residue).
 pause-probe PASSED against the live final build (menu clearing, both-timebase hold, restart
 preserves totals, quit works). Evidence: test-results/round2-gate/gate-0827-vs-live-slot.log.
+
+**Extension day, final-hours QA (no code changes to the game):** a fresh-eyes visual sweep
+(`scripts/visual-sweep.mjs`, new - read-only) played the LIVE slot to the states no screenshot
+had yet shown - L1's beacon-open invitation near and far, the collect moment, L2's shy-mote
+legibility, L3's wind flecks - and found nothing to fix: zero page errors across the full
+session, every transient text light-on-dark (no repeat of round 1's ending-contrast class),
+and the one anomaly it surfaced (a "death" logged during a successful arrival) traced to the
+probe's own level-boundary blind spot (level 2 is also scene "level"), with the fail/complete
+`locked` guards confirmed mutually exclusive in code. `scripts/slot-verify.mjs` (new) is the
+one-command pre-deadline check that the slot serves exactly the local dist bundle and boots
+clean. Evidence: test-results/visual-sweep/.

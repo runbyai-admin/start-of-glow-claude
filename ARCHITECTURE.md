@@ -30,6 +30,8 @@ scripts/check-workspace.mjs   repo hygiene guard behind `npm run check`
 scripts/play-gate.mjs      real-input full-game playthroughs (plan Phase 1's check)
 scripts/shy-probe.mjs      real-input proof of the level-2 shy-mote mechanic (?level=2)
 scripts/round2-gate.mjs    one-session full proof: menu mechanic, 3 levels, repeated deaths, ending, second run
+scripts/visual-sweep.mjs   read-only judge-eye capture of the transient states (beacon open, whisper, storm) against a served build
+scripts/slot-verify.mjs    pre-deadline check: live slot serves exactly the local dist bundle, boots clean at 1280x720
 deploy.sh                  publish a build to one of the four slots
 ```
 
