@@ -106,6 +106,8 @@ const LIGHT_CHARGED = 0xffe9c8;
 const LIGHT_SPENT = 0x8fb8ff;
 /** Fast enough to read as a state change (~0.15s), slow enough not to strobe on the line. */
 const LIGHT_SHIFT_PER_SECOND = 3;
+/** The brief's own window: after ten seconds the opening is over either way. */
+const HUD_LATEST_REVEAL_MS = 10_000;
 /** A reach takes an armful, not a room; the rest stays on the ground. */
 const GATHER_MAX_MOTES = 4;
 /** Per-mote stagger on the way in - the cascade is the reward, so it lands as notes, not a chord. */
@@ -654,6 +656,26 @@ export class LevelScene extends Phaser.Scene {
     }
   }
 
+  /** Idempotent: the first press and the ten-second backstop both call it. */
+  private revealHud(): void {
+    if (!this.hud || this.hud.alpha > 0.4) return;
+    this.tweens.add({ targets: this.hud, alpha: 0.85, duration: 900, ease: "Sine.easeInOut" });
+  }
+
+  /**
+   * The stat line, and when the game has earned the right to show it.
+   *
+   * The brief for this round says the first ten seconds are the pull and its
+   * cost and nothing else. 'LEVEL 1/3   motes 0/14 · beacon at 10   resets 0'
+   * is emphatically something else: it talks about levels, quotas and beacons
+   * before the player has pressed once, and it is the same corner-of-the-screen
+   * bookkeeping I just criticised openai for carrying. So it starts invisible
+   * and fades in on the first press - by which point the player has done the
+   * one thing the opening is for, and a count of what is left is finally an
+   * answer to a question they might actually have - or at ten seconds,
+   * whichever comes first, so a player who never presses is not left without
+   * it for the whole level.
+   */
   private buildHud(): void {
     this.hud = this.add
       .text(27, 24, "", {
@@ -661,9 +683,10 @@ export class LevelScene extends Phaser.Scene {
         fontSize: "17px",
         color: "#7e93b8",
       })
-      .setAlpha(0.85)
+      .setAlpha(this.taught ? 0.85 : 0)
       .setDepth(100)
       .setScrollFactor(0);
+    if (!this.taught) this.time.delayedCall(HUD_LATEST_REVEAL_MS, () => this.revealHud());
 
     this.levelCard = this.add
       .text(VIEW_WIDTH / 2, 46, `${this.config.index} · ${this.config.name}`, {
@@ -768,6 +791,8 @@ export class LevelScene extends Phaser.Scene {
         this.tweens.killTweensOf(this.reachLine);
         this.tweens.add({ targets: this.reachLine, alpha: 0, duration: 420 });
       }
+      // The opening has done its job; the bookkeeping may now appear.
+      this.revealHud();
     }
 
     const caught: Array<{ mote: Phaser.GameObjects.Image; d: number }> = [];
@@ -949,10 +974,27 @@ export class LevelScene extends Phaser.Scene {
         this.reachRing.strokeCircle(this.wisp.x, this.wisp.y, Math.max(this.reach - GATHER_COST, REACH_MIN));
       }
     } else {
-      // Spent: how far back to the next press, breathing so it reads as a
-      // target rather than as another edge of the light.
-      this.reachRing.lineStyle(1, 0xffe2a8, 0.14 + Math.sin(time * 0.005) * 0.06);
+      // Spent: the charge line, and how far along it you are - stolen from
+      // grok, who draw their resource as an arc on the light's own edge rather
+      // than as a gauge in a corner. Two concentric circles make the player
+      // compare radii, which is slow; an arc filling toward a full circle is
+      // one shape and reads at a glance. It vanishes the moment it closes.
+      const progress = Phaser.Math.Clamp((this.reach - REACH_MIN) / (CHARGE_LINE - REACH_MIN), 0, 1);
+      this.reachRing.lineStyle(1, 0x8fb4d8, 0.1);
       this.reachRing.strokeCircle(this.wisp.x, this.wisp.y, CHARGE_LINE);
+      // Wound from straight up, clockwise, so "nearly there" is a nearly
+      // closed ring and not a length the player has to measure.
+      this.reachRing.lineStyle(2.5, 0xffe2a8, 0.42 + Math.sin(time * 0.005) * 0.08);
+      this.reachRing.beginPath();
+      this.reachRing.arc(
+        this.wisp.x,
+        this.wisp.y,
+        CHARGE_LINE,
+        Phaser.Math.DegToRad(-90),
+        Phaser.Math.DegToRad(-90 + 360 * progress),
+        false,
+      );
+      this.reachRing.strokePath();
     }
 
     // A filament to each mote in reach: what the press will take, before it is
