@@ -1396,13 +1396,22 @@ export class LevelScene extends Phaser.Scene {
       // the level's motes and started it again, which at twenty seconds in is
       // the moment a player stops playing - and it punished the one thing the
       // round wants them doing, which is going near a shadow to reach past it.
-      // Now the sting is the reach itself: it is snuffed to the floor and only
-      // motes bring it back, so a death late in a level means finishing that
-      // level nearly blind, walking back across ground you already lit. Same
-      // currency as the press, so there is one number in the game and dying,
-      // spending and collecting all speak it.
+      // Now the sting is the reach itself: it is snuffed and only motes bring
+      // it back, so a death late in a level means finishing that level nearly
+      // blind, walking back across ground you already lit. Same currency as the
+      // press, so there is one number in the game and dying, spending and
+      // collecting all speak it.
+      //
+      // It stops AT the charge line, not at the floor. Round 3 could snuff to
+      // the floor safely because the press still fired down there; now that a
+      // press has to be afforded, the floor also means "you may not use the
+      // verb", and a greedy run dying six times in thirty seconds spent most of
+      // itself blind AND locked out of the one thing the game is about. A
+      // shadow takes your light. It does not get to take your next move: you
+      // come back small, with exactly one press in hand, and spending it puts
+      // you on the floor by your own choice rather than by the shadow's.
       this.tweens.killTweensOf(this.wispLight);
-      this.setReach(REACH_MIN);
+      this.setReach(CHARGE_LINE);
       this.wispLight.intensity = this.baseIntensity();
       this.gatherReadyAt = 0;
       this.updateHud();
