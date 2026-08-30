@@ -55,19 +55,44 @@ const RADIANCE_TIME_SCALE = 0.42;
  * The reach. This round's one verb: your glow is how far you can pull light in,
  * and pulling spends it. Press (click, tap or space) and every mote inside the
  * lit circle comes to you; the circle shrinks by GATHER_COST whether or not it
- * catches anything, and every mote you take - by reaching or by touching - puts
- * REACH_PER_MOTE back. Even a full armful gives back less than the press cost,
- * so reaching is never the cheap way to farm light - it is what you spend light
- * on to take the mote you could not safely walk to, or to take four at once
- * before a shadow arrives. Walking into motes is what makes you bright again.
+ * catches anything.
+ *
+ * Round 4 makes the press a decision instead of a habit. Two things changed.
+ *
+ * First, THE PRESS HAS TO BE AFFORDED. It only fires while the reach is at or
+ * above CHARGE_LINE - high enough that paying GATHER_COST still leaves the
+ * light at its floor rather than below it. Round 3 let the reach bottom out at
+ * REACH_MIN and then kept firing for free, which is exactly why the round-3
+ * verdict read "spammed the pull - nothing stopped me": the cost was real
+ * everywhere except at the bottom, and the bottom is where a spammer lives.
+ * Below the line the press is refused, audibly and visibly, and the only way
+ * back is to walk.
+ *
+ * Second, WALKING PAYS BETTER THAN PULLING. A mote you walk into returns
+ * REACH_PER_WALK; a mote the press drags in returns REACH_PER_PULL, well under
+ * half. So a press can never fund the next press - a full armful of four still
+ * leaves you short of the line - and the loop has a rhythm: spend the circle to
+ * take what you could not safely reach, then walk a mote or two to earn the
+ * next press back. Convenience is the thing you are paying for.
+ *
  * The lit radius IS the rule: nothing to read, because you can see exactly as
- * far as you can reach.
+ * far as you can reach - and, while you are charged, exactly how small the next
+ * press will leave you (see drawReachRing's cost ghost).
  */
 const REACH_START = 390;
 const REACH_MIN = 170;
 const REACH_MAX = 470;
-const REACH_PER_MOTE = 32;
-const GATHER_COST = 170;
+/** Walked into: the economical way to gather, and the only way to fund a press. */
+const REACH_PER_WALK = 46;
+/** Dragged in by a press: worth taking, never worth pressing for on its own. */
+const REACH_PER_PULL = 18;
+const GATHER_COST = 160;
+/**
+ * The charge line. A press is affordable only at or above this, so paying for
+ * one lands exactly on REACH_MIN and never below it: the floor is the bottom of
+ * a press, not a place you can sit and press for free.
+ */
+const CHARGE_LINE = REACH_MIN + GATHER_COST;
 const GATHER_COOLDOWN_MS = 420;
 /** A reach takes an armful, not a room; the rest stays on the ground. */
 const GATHER_MAX_MOTES = 4;
@@ -151,6 +176,8 @@ export class LevelScene extends Phaser.Scene {
   /** How far the light reaches right now - the light's radius, the pull's radius, one number. */
   private reach = REACH_START;
   private gatherReadyAt = 0;
+  /** When the reach last crossed back over CHARGE_LINE - drives the "ready" glint. */
+  private chargedAt = -9999;
   private gathers = 0;
   /** Motes were in reach and the player has not pressed yet - drives the wordless invitation. */
   private taught = false;
@@ -175,6 +202,7 @@ export class LevelScene extends Phaser.Scene {
     this.pulseBoost = 0;
     this.reach = REACH_START;
     this.gatherReadyAt = 0;
+    this.chargedAt = -9999;
     this.gathers = 0;
     this.inviteAt = 0;
     this.inviteShown = 0;
@@ -708,6 +736,15 @@ export class LevelScene extends Phaser.Scene {
    */
   private gather(): void {
     if (this.locked || this.time.now < this.gatherReadyAt) return;
+    // The press has to be afforded. Refusing costs nothing - a spiral where a
+    // broke player is also punished for asking would just be a dead end - but
+    // it is unmistakable: the ring snaps cold, the light gutters, and the
+    // reach's own sound closes instead of opening.
+    if (!this.charged()) {
+      this.gatherReadyAt = this.time.now + GATHER_COOLDOWN_MS;
+      this.denyGather();
+      return;
+    }
     this.gatherReadyAt = this.time.now + GATHER_COOLDOWN_MS;
     this.gathers += 1;
     if (!this.taught) {
@@ -777,7 +814,10 @@ export class LevelScene extends Phaser.Scene {
     if (hit) this.cameras.main.shake(70, 0.0012);
   }
 
-  /** A gathered mote reaching the wisp - the same collect as a touch, one flight later. */
+  /**
+   * A gathered mote reaching the wisp - the same collect as a touch, one flight
+   * later, but worth less light: this one was carried to you.
+   */
   private absorb(mote: Phaser.GameObjects.Image): void {
     const index = this.incoming.indexOf(mote);
     if (index >= 0) this.incoming.splice(index, 1);
@@ -786,16 +826,83 @@ export class LevelScene extends Phaser.Scene {
     // that snuffed the run does not get to bank the mote that was on its way.
     if (this.locked) return;
     this.trail.explode(16, this.wisp.x, this.wisp.y);
-    this.takeMote();
+    this.takeMote(REACH_PER_PULL);
+  }
+
+  /** True while the reach can pay for a press and still land on its floor. */
+  private charged(): boolean {
+    return this.reach >= CHARGE_LINE;
+  }
+
+  /**
+   * A refused press. The gesture still gets an answer - the ring snaps inward
+   * cold and stops at the charge line rather than the wisp, so the shape the
+   * refusal draws is the exact distance still to be walked.
+   */
+  private denyGather(): void {
+    this.ambience.denied();
+    // A dip, not a flash. reachFeel rewrites this.gutter every frame, so the
+    // flinch goes through the light's own intensity where it survives: the
+    // wisp ducks and comes back, the visual shape of "not enough".
+    this.pulseBoost = -0.55;
+    const ring = this.add
+      .circle(this.wisp.x, this.wisp.y, this.reach, 0x8fb4d8, 0)
+      .setStrokeStyle(2, 0x8fb4d8, 0.5)
+      .setDepth(7);
+    this.tweens.add({
+      targets: ring,
+      radius: CHARGE_LINE,
+      alpha: 0,
+      duration: 260,
+      ease: "Cubic.easeOut",
+      onUpdate: () => ring.setPosition(this.wisp.x, this.wisp.y),
+      onComplete: () => ring.destroy(),
+    });
   }
 
   private setReach(next: number): void {
+    const was = this.charged();
     this.reach = Phaser.Math.Clamp(next, REACH_MIN, REACH_MAX);
     this.wispLight.radius = this.reach;
     this.wisp.setScale(0.34 + (this.reach / REACH_MAX) * 0.42);
+    // Crossing back over the line is the payoff for walking, so it gets a
+    // moment of its own: a two-note lift and the ring blooming warm. Without
+    // it, "you can press again" is a state the player has to infer.
+    if (!was && this.charged()) this.markCharged();
   }
 
-  /** Draw the edge of the reach, bright only while it has something in it. */
+  /** The ring coming back up to the line - the reward for the walk. */
+  private markCharged(): void {
+    this.ambience.charged();
+    this.chargedAt = this.time.now;
+    const ring = this.add
+      .circle(this.wisp.x, this.wisp.y, CHARGE_LINE * 0.72, 0xffe2a8, 0)
+      .setStrokeStyle(2.5, 0xffe2a8, 0.8)
+      .setDepth(7);
+    this.tweens.add({
+      targets: ring,
+      radius: this.reach,
+      alpha: 0,
+      duration: 340,
+      ease: "Cubic.easeOut",
+      onUpdate: () => ring.setPosition(this.wisp.x, this.wisp.y),
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  /**
+   * The edge of the reach, and - this round's whole point - what pressing it
+   * would cost. Three circles at most, none of them a HUD:
+   *
+   *  - the reach itself, warm and solid while a press is affordable, thin and
+   *    cold while it is not;
+   *  - the COST GHOST, a faint inner circle at (reach - GATHER_COST) drawn only
+   *    while charged and only while there is something to take. That is the
+   *    price, on screen, before the press: this is how small you will be;
+   *  - the CHARGE LINE, drawn only while spent, at the radius the light has to
+   *    grow back to. It is the same circle the refused press collapses onto, so
+   *    "not yet" and "this far" are one shape.
+   */
   private drawReachRing(time: number): void {
     this.reachRing.clear();
     if (this.locked) return;
@@ -806,20 +913,42 @@ export class LevelScene extends Phaser.Scene {
         break;
       }
     }
-    const ready = this.time.now >= this.gatherReadyAt;
+    const charged = this.charged();
+    const ready = charged && this.time.now >= this.gatherReadyAt;
     // Untaught players get a slow breathing edge the first time something is in
     // range; once they have pressed once the ring settles down and stops asking.
     const invite = inReach && !this.taught ? 0.18 + Math.sin(time * 0.006) * 0.12 : 0;
-    const alpha = (inReach ? (ready ? 0.34 : 0.13) : 0.06) + invite;
-    this.reachRing.lineStyle(inReach ? 2 : 1, inReach ? 0xffe2a8 : 0x8fb4d8, alpha);
+    // A glint for a beat after the reach comes back over the line: the edge you
+    // just earned announces itself, then settles.
+    const glint = Math.max(0, 1 - (this.time.now - this.chargedAt) / 700) * 0.3;
+    const warm = charged && inReach;
+    const alpha = (inReach ? (ready ? 0.34 : 0.13) : 0.06) + invite + glint;
+    this.reachRing.lineStyle(warm ? 2 : 1, warm ? 0xffe2a8 : 0x8fb4d8, alpha);
     this.reachRing.strokeCircle(this.wisp.x, this.wisp.y, this.reach);
 
-    // A filament to each mote in reach: what the press will take, before it is pressed.
+    if (charged) {
+      // The cost ghost. Only while there is something worth taking, so it reads
+      // as the price of THIS press rather than as permanent furniture.
+      if (inReach) {
+        this.reachRing.lineStyle(1, 0xffb36b, 0.2 + glint * 0.5);
+        this.reachRing.strokeCircle(this.wisp.x, this.wisp.y, Math.max(this.reach - GATHER_COST, REACH_MIN));
+      }
+    } else {
+      // Spent: how far back to the next press, breathing so it reads as a
+      // target rather than as another edge of the light.
+      this.reachRing.lineStyle(1, 0xffe2a8, 0.14 + Math.sin(time * 0.005) * 0.06);
+      this.reachRing.strokeCircle(this.wisp.x, this.wisp.y, CHARGE_LINE);
+    }
+
+    // A filament to each mote in reach: what the press will take, before it is
+    // pressed. Cold and thin while spent - still there to take, just not now.
     if (!inReach) return;
     for (const mote of this.motes) {
       const d = Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y);
       if (d > this.reach) continue;
-      this.reachRing.lineStyle(1, 0xffe2a8, 0.16 + 0.26 * (1 - d / this.reach));
+      const near = 1 - d / this.reach;
+      if (charged) this.reachRing.lineStyle(1, 0xffe2a8, 0.16 + 0.26 * near);
+      else this.reachRing.lineStyle(1, 0x8fb4d8, 0.07 + 0.1 * near);
       this.reachRing.lineBetween(this.wisp.x, this.wisp.y, mote.x, mote.y);
     }
   }
@@ -967,15 +1096,16 @@ export class LevelScene extends Phaser.Scene {
 
   /**
    * One mote becomes yours - the single place a collect is counted, whether it
-   * was walked into or reached for. Every mote feeds the reach back, which is
-   * what makes a press that catches three worth its cost and a press that
-   * catches one a small, deliberate loss.
+   * was walked into or reached for. What it is worth depends on which: walking
+   * into one returns REACH_PER_WALK and is how a press gets funded, while one
+   * the press dragged in returns REACH_PER_PULL, so no armful ever pays for the
+   * armful after it.
    */
-  private takeMote(): void {
+  private takeMote(gain: number = REACH_PER_WALK): void {
     this.collected += 1;
     this.advanceChain();
     this.ambience.chime(this.collected, this.chainState.count);
-    this.setReach(this.reach + REACH_PER_MOTE);
+    this.setReach(this.reach + gain);
     this.collectionImpact();
     this.grow();
   }

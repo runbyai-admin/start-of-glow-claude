@@ -196,6 +196,86 @@ export class Ambience {
     }
   }
 
+  /**
+   * A press that cannot be paid for. The deliberate inverse of gather(): the
+   * filter closes instead of opening and the body bends DOWN, so the refusal is
+   * recognisable as the reach's own sound played backwards rather than as an
+   * error beep. Quiet on purpose - it is information, not a scolding.
+   */
+  denied(): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      const master = this.master;
+      const now = ctx.currentTime;
+      const dur = 0.2;
+
+      const noise = ctx.createBufferSource();
+      noise.buffer = this.noiseBuffer(ctx);
+      const band = ctx.createBiquadFilter();
+      band.type = "bandpass";
+      band.Q.value = 1.1;
+      band.frequency.setValueAtTime(700, now);
+      band.frequency.exponentialRampToValueAtTime(180, now + dur);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.0001, now);
+      noiseGain.gain.linearRampToValueAtTime(0.03, now + 0.02);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      noise.connect(band);
+      band.connect(noiseGain);
+      noiseGain.connect(master);
+      noise.start(now);
+      noise.stop(now + dur + 0.05);
+
+      const body = ctx.createOscillator();
+      body.type = "sine";
+      body.frequency.setValueAtTime(150, now);
+      body.frequency.exponentialRampToValueAtTime(84, now + dur);
+      const bodyGain = ctx.createGain();
+      bodyGain.gain.setValueAtTime(0.0001, now);
+      bodyGain.gain.linearRampToValueAtTime(0.05, now + 0.02);
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + dur + 0.06);
+      body.connect(bodyGain);
+      bodyGain.connect(master);
+      body.start(now);
+      body.stop(now + dur + 0.1);
+    } catch {
+      /* a missed refusal sound is not a game-breaking error */
+    }
+  }
+
+  /**
+   * The reach coming back over the line: a clean two-note lift, a fifth apart,
+   * well above the collect chimes so it reads as a state change rather than as
+   * another mote. This is the sound the walk is for.
+   */
+  charged(): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      const master = this.master;
+      const now = ctx.currentTime;
+      [
+        { f: 659.25, at: 0 },
+        { f: 987.77, at: 0.075 },
+      ].forEach(({ f, at }) => {
+        const osc = ctx.createOscillator();
+        osc.type = "sine";
+        osc.frequency.value = f;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, now + at);
+        gain.gain.linearRampToValueAtTime(0.055, now + at + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + at + 0.42);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(now + at);
+        osc.stop(now + at + 0.5);
+      });
+    } catch {
+      /* a missed ready cue is not a game-breaking error */
+    }
+  }
+
   /** Low warm bloom at a full chain: distinct from pickup and beacon voices. */
   radiance(): void {
     if (!this.ctx || !this.master) return;
