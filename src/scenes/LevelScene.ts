@@ -108,6 +108,39 @@ const LIGHT_SPENT = 0x8fb8ff;
 const LIGHT_SHIFT_PER_SECOND = 3;
 /** The brief's own window: after ten seconds the opening is over either way. */
 const HUD_LATEST_REVEAL_MS = 10_000;
+
+/**
+ * The deep reach - the further mechanic this round's brief allows on top,
+ * explicitly not in the opening. A tap is still exactly the press it was, and
+ * the first ten seconds never change.
+ *
+ * Keep holding, though, and the wisp starts POURING its light outward: a bright
+ * edge travels out past the lit circle, taking every mote it crosses, while the
+ * reach itself drains behind it to pay for the distance. You are throwing your
+ * light away from you to take something you could not otherwise get near, and
+ * you can watch the trade happen - the sweep going out, the circle shrinking in.
+ *
+ * It falls out of rules that already existed rather than adding a currency. The
+ * hold can only spend down to REACH_MIN, so how far you can throw is set by how
+ * bright you already are: at the charge line a press is all you can afford and
+ * there is no deep reach at all, and only a wisp near REACH_MAX can throw far.
+ * Since a shadow notices light as far as the light carries (alertRadius), being
+ * bright enough to reach deep is also being loud - so the guarded pocket is
+ * takeable, and getting bright enough to take it is the risk you pay in.
+ */
+const DEEP_HOLD_DELAY_MS = 240;
+/** World px the poured edge travels per second. */
+const DEEP_SWEEP_SPEED = 420;
+/**
+ * Reach spent per world px of sweep - the exchange rate for distance, and the
+ * whole balance of the mechanic. At 0.62 a wisp at full brightness could throw
+ * its edge past 530px, which is most of a 1280-wide frame: that is not reaching
+ * past a patrol, it is vacuuming the level, and a button that is always correct
+ * when you are bright is the same failure as a press that is always free. At
+ * 1.0 a full wisp buys about 140px beyond where its light already ended - one
+ * guarded pocket, one hazard lane, and no more.
+ */
+const DEEP_COST_PER_PX = 1.0;
 /** A reach takes an armful, not a room; the rest stays on the ground. */
 const GATHER_MAX_MOTES = 4;
 /** Per-mote stagger on the way in - the cascade is the reward, so it lands as notes, not a chord. */
@@ -194,6 +227,11 @@ export class LevelScene extends Phaser.Scene {
   private chargedAt = -9999;
   /** 0 spent, 1 charged - lerped so the colour snaps without strobing on the line. */
   private chargeTint = 1;
+  /** Set while the player holds the press; -1 when nothing is held. */
+  private holdSince = -1;
+  /** Radius of the poured edge while a deep reach is running, else 0. */
+  private sweep = 0;
+  private sweepRing?: Phaser.GameObjects.Arc;
   private gathers = 0;
   /** Motes were in reach and the player has not pressed yet - drives the wordless invitation. */
   private taught = false;
@@ -220,6 +258,9 @@ export class LevelScene extends Phaser.Scene {
     this.gatherReadyAt = 0;
     this.chargedAt = -9999;
     this.chargeTint = 1;
+    this.holdSince = -1;
+    this.sweep = 0;
+    this.sweepRing = undefined;
     this.gathers = 0;
     this.inviteAt = 0;
     this.inviteShown = 0;
@@ -751,12 +792,20 @@ export class LevelScene extends Phaser.Scene {
       this.ambience.unlock();
       if (this.locked) return;
       this.target.set(pointer.worldX, pointer.worldY);
+      // The press still fires on DOWN, so a tap feels exactly as it did and the
+      // deep reach costs no input latency; holding only ever adds.
       this.gather();
+      this.holdSince = this.time.now;
     });
-    this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE).on("down", () => {
+    this.input.on(Phaser.Input.Events.POINTER_UP, () => this.endDeepReach());
+    this.input.on(Phaser.Input.Events.GAME_OUT, () => this.endDeepReach());
+    const space = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    space.on("down", () => {
       this.ambience.unlock();
       this.gather();
+      this.holdSince = this.time.now;
     });
+    space.on("up", () => this.endDeepReach());
     this.cursors = this.input.keyboard!.createCursorKeys();
     this.wasd = {
       up: this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.W),
@@ -867,6 +916,84 @@ export class LevelScene extends Phaser.Scene {
     if (this.locked) return;
     this.trail.explode(16, this.wisp.x, this.wisp.y);
     this.takeMote(REACH_PER_PULL);
+  }
+
+  /**
+   * The deep reach, stepped once per frame while the press is held. The poured
+   * edge travels out from the lit circle at DEEP_SWEEP_SPEED, every mote it
+   * crosses is taken, and the reach drains by DEEP_COST_PER_PX for every pixel
+   * of distance bought. It ends itself the moment the light hits its floor, so
+   * the mechanic can empty you but never break you.
+   */
+  private stepDeepReach(dt: number): void {
+    if (this.holdSince < 0 || this.locked) {
+      if (this.sweep > 0) this.endDeepReach();
+      return;
+    }
+    if (this.time.now - this.holdSince < DEEP_HOLD_DELAY_MS) return;
+    if (this.reach <= REACH_MIN) {
+      if (this.sweep > 0) this.endDeepReach();
+      return;
+    }
+
+    if (this.sweep <= 0) {
+      // Starts at the edge of the light: the pour is a continuation of the
+      // press, not a second circle appearing out of nowhere.
+      this.sweep = this.reach;
+      this.sweepRing = this.add
+        .circle(this.wisp.x, this.wisp.y, this.sweep, 0xffe2a8, 0)
+        .setStrokeStyle(2.5, 0xffe8c4, 0.75)
+        .setDepth(7);
+      this.ambience.pour();
+    }
+
+    // Buy as much distance as the remaining light can pay for this frame.
+    const wanted = DEEP_SWEEP_SPEED * dt;
+    const affordable = Math.max(0, (this.reach - REACH_MIN) / DEEP_COST_PER_PX);
+    const step = Math.min(wanted, affordable);
+    const from = this.sweep;
+    this.sweep += step;
+    this.setReach(this.reach - step * DEEP_COST_PER_PX);
+    this.sweepRing?.setRadius(this.sweep).setPosition(this.wisp.x, this.wisp.y);
+
+    // Everything the edge crossed this frame comes in.
+    for (let i = this.motes.length - 1; i >= 0; i -= 1) {
+      const mote = this.motes[i];
+      const d = Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y);
+      if (d <= from || d > this.sweep) continue;
+      this.motes.splice(i, 1);
+      this.incoming.push(mote);
+      this.tweens.killTweensOf(mote);
+      this.tweens.add({
+        targets: mote,
+        x: () => this.wisp.x,
+        y: () => this.wisp.y,
+        scale: 0.9,
+        alpha: 1,
+        duration: GATHER_FLIGHT_MS + d * 0.28,
+        ease: "Cubic.easeIn",
+        onComplete: () => this.absorb(mote),
+      });
+    }
+
+    if (this.reach <= REACH_MIN) this.endDeepReach();
+  }
+
+  /** Let go: the poured edge fades where it stopped and the light settles. */
+  private endDeepReach(): void {
+    this.holdSince = -1;
+    if (this.sweep <= 0) return;
+    this.sweep = 0;
+    const ring = this.sweepRing;
+    this.sweepRing = undefined;
+    if (!ring) return;
+    this.tweens.add({
+      targets: ring,
+      alpha: 0,
+      duration: 260,
+      ease: "Sine.easeOut",
+      onComplete: () => ring.destroy(),
+    });
   }
 
   /** True while the reach can pay for a press and still land on its floor. */
@@ -1101,6 +1228,7 @@ export class LevelScene extends Phaser.Scene {
     this.pulseBoost = Phaser.Math.Linear(this.pulseBoost, 0, 1 - Math.pow(0.001, dt));
     this.wispLight.intensity = this.baseIntensity() + breathe + this.pulseBoost + this.reachFeel(time, dt);
     this.paintCharge(dt);
+    this.stepDeepReach(dt);
 
     this.drawReachRing(time);
     this.inviteGather();

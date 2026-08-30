@@ -276,6 +276,54 @@ export class Ambience {
     }
   }
 
+  /**
+   * The deep reach starting: a low sustained pour rather than a hit. Where
+   * gather() is a short inhale, this opens and stays open for as long as a hold
+   * usually lasts, so the ear hears "still going" while the edge travels out.
+   */
+  pour(): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      const master = this.master;
+      const now = ctx.currentTime;
+      const dur = 0.9;
+
+      const noise = ctx.createBufferSource();
+      noise.buffer = this.noiseBuffer(ctx);
+      noise.loop = true;
+      const band = ctx.createBiquadFilter();
+      band.type = "bandpass";
+      band.Q.value = 0.9;
+      band.frequency.setValueAtTime(300, now);
+      band.frequency.exponentialRampToValueAtTime(2600, now + dur);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.0001, now);
+      noiseGain.gain.linearRampToValueAtTime(0.055, now + 0.12);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      noise.connect(band);
+      band.connect(noiseGain);
+      noiseGain.connect(master);
+      noise.start(now);
+      noise.stop(now + dur + 0.05);
+
+      const body = ctx.createOscillator();
+      body.type = "triangle";
+      body.frequency.setValueAtTime(96, now);
+      body.frequency.exponentialRampToValueAtTime(240, now + dur);
+      const bodyGain = ctx.createGain();
+      bodyGain.gain.setValueAtTime(0.0001, now);
+      bodyGain.gain.linearRampToValueAtTime(0.075, now + 0.1);
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, now + dur + 0.1);
+      body.connect(bodyGain);
+      bodyGain.connect(master);
+      body.start(now);
+      body.stop(now + dur + 0.15);
+    } catch {
+      /* a missed pour is not a game-breaking error */
+    }
+  }
+
   /** Low warm bloom at a full chain: distinct from pickup and beacon voices. */
   radiance(): void {
     if (!this.ctx || !this.master) return;
