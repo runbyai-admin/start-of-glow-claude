@@ -94,6 +94,18 @@ const GATHER_COST = 160;
  */
 const CHARGE_LINE = REACH_MIN + GATHER_COST;
 const GATHER_COOLDOWN_MS = 420;
+/**
+ * The light has two colours, and which one it is burning is the whole state of
+ * the game. Charged is warm - it has a press in it. Spent is the cold blue the
+ * wisp has always been. openai answered this round's brief with a "LUMEN 4/5"
+ * gauge in the corner, which is instantly readable and is exactly the HUD this
+ * game does not want; the colour of the light itself is readable in the same
+ * half-second and lives where the player is already looking.
+ */
+const LIGHT_CHARGED = 0xffe9c8;
+const LIGHT_SPENT = 0x8fb8ff;
+/** Fast enough to read as a state change (~0.15s), slow enough not to strobe on the line. */
+const LIGHT_SHIFT_PER_SECOND = 3;
 /** A reach takes an armful, not a room; the rest stays on the ground. */
 const GATHER_MAX_MOTES = 4;
 /** Per-mote stagger on the way in - the cascade is the reward, so it lands as notes, not a chord. */
@@ -178,6 +190,8 @@ export class LevelScene extends Phaser.Scene {
   private gatherReadyAt = 0;
   /** When the reach last crossed back over CHARGE_LINE - drives the "ready" glint. */
   private chargedAt = -9999;
+  /** 0 spent, 1 charged - lerped so the colour snaps without strobing on the line. */
+  private chargeTint = 1;
   private gathers = 0;
   /** Motes were in reach and the player has not pressed yet - drives the wordless invitation. */
   private taught = false;
@@ -203,6 +217,7 @@ export class LevelScene extends Phaser.Scene {
     this.reach = REACH_START;
     this.gatherReadyAt = 0;
     this.chargedAt = -9999;
+    this.chargeTint = 1;
     this.gathers = 0;
     this.inviteAt = 0;
     this.inviteShown = 0;
@@ -982,6 +997,26 @@ export class LevelScene extends Phaser.Scene {
     return this.gutter;
   }
 
+  /**
+   * Say charged or spent in the colour of the light. Everything else about the
+   * reach is a quantity - a radius, a scale, a spark rate - and quantities read
+   * slowly. This one is a state, so it gets the fastest channel on screen: the
+   * wisp and its light go warm when a press is affordable and cold when it is
+   * not, at the centre of the frame, where the eye already is.
+   */
+  private paintCharge(dt: number): void {
+    const want = this.charged() ? 1 : 0;
+    this.chargeTint = Phaser.Math.Linear(this.chargeTint, want, 1 - Math.pow(0.001, dt * LIGHT_SHIFT_PER_SECOND));
+    const blend = Phaser.Display.Color.Interpolate.ColorWithColor(
+      Phaser.Display.Color.ValueToColor(LIGHT_SPENT),
+      Phaser.Display.Color.ValueToColor(LIGHT_CHARGED),
+      100,
+      Math.round(this.chargeTint * 100),
+    );
+    this.wispLight.color.set(blend.r / 255, blend.g / 255, blend.b / 255);
+    this.wisp.setTint(Phaser.Display.Color.GetColor(blend.r, blend.g, blend.b));
+  }
+
   update(time: number, delta: number): void {
     if (this.locked) return;
 
@@ -1023,6 +1058,7 @@ export class LevelScene extends Phaser.Scene {
     const breathe = Math.sin(time * 0.0007) * 0.12;
     this.pulseBoost = Phaser.Math.Linear(this.pulseBoost, 0, 1 - Math.pow(0.001, dt));
     this.wispLight.intensity = this.baseIntensity() + breathe + this.pulseBoost + this.reachFeel(time, dt);
+    this.paintCharge(dt);
 
     this.drawReachRing(time);
     this.inviteGather();
