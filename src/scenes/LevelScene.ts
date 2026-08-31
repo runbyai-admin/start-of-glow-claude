@@ -1849,7 +1849,10 @@ export class LevelScene extends Phaser.Scene {
   }
 
   private finishHollow(): void {
-    const hearthsLit = this.hearths.filter((h) => h.state.lit).length;
+    // Ordinary hearths only - the HUD counts x/5 all act, and the ending's
+    // "N hearths burn behind you" must agree with it (the tree is the dawn,
+    // not a hearth in the tally).
+    const hearthsLit = this.hearths.filter((h) => h.state.lit && !h.state.final).length;
     this.cameras.main.fadeOut(900, 40, 24, 16);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
       this.scene.start("ending", {
