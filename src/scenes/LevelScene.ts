@@ -173,6 +173,7 @@ export class LevelScene extends Phaser.Scene {
     halo: Phaser.GameObjects.Image;
     light?: Phaser.GameObjects.Light;
     breathAt: number;
+    socket?: Phaser.GameObjects.Arc;
   }> = [];
   private kindles = 0;
   private kindleLine?: Phaser.GameObjects.Text;
@@ -492,7 +493,14 @@ export class LevelScene extends Phaser.Scene {
         repeat: -1,
         ease: "Sine.easeInOut",
       });
-      this.hearths.push({ state, img, halo, breathAt: 0 });
+      // A thin cold ring marks a dormant hearth as a socket waiting for the
+      // light, so it never reads as one more ember to walk into. It goes the
+      // moment the hearth takes a press.
+      const socket = this.add
+        .circle(state.x, state.y, state.final ? 52 : 34, 0x000000, 0)
+        .setStrokeStyle(1.5, 0xc9a289, 0.4)
+        .setDepth(4);
+      this.hearths.push({ state, img, halo, breathAt: 0, socket });
     }
   }
 
@@ -1051,6 +1059,8 @@ export class LevelScene extends Phaser.Scene {
   private igniteHearth(hearth: (typeof this.hearths)[number]): void {
     hearth.state.lit = true;
     hearth.breathAt = this.time.now + HEARTH_BREATH_MS;
+    hearth.socket?.destroy();
+    hearth.socket = undefined;
     this.tweens.killTweensOf(hearth.img);
     hearth.img.setAlpha(1);
     const scale = hearth.state.final ? 1.5 : 0.9;
