@@ -75,13 +75,38 @@ export class EndingScene extends Phaser.Scene {
     this.cameras.main.setBackgroundColor(this.dawn ? 0x1a0e08 : 0x05060c);
 
     const sky = this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setDepth(-100);
-    if (this.dawn) sky.setTint(0xff9a5a).setAlpha(0.85);
+    if (this.dawn) {
+      sky.setTint(0xff9a5a).setAlpha(0.85);
+      // Tinting a night sky cannot brighten it - the sun has to be painted.
+      // A warm base wash, then a horizon bloom that swells as the scene
+      // settles: the first sunrise this game has ever shown.
+      this.add
+        .rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, VIEW_WIDTH, VIEW_HEIGHT, 0x2e1608)
+        .setDepth(-99)
+        .setAlpha(0.85);
+      const sunrise = this.add
+        .image(VIEW_WIDTH / 2, VIEW_HEIGHT * 1.05, "wisp")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setTint(0xff9040)
+        .setScale(6, 3.4)
+        .setAlpha(0.5)
+        .setDepth(-95);
+      this.tweens.add({
+        targets: sunrise,
+        alpha: 0.85,
+        scaleX: 8.5,
+        scaleY: 4.6,
+        duration: 4200,
+        ease: "Sine.easeOut",
+      });
+    }
 
     const wisp = this.add
       .image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "wisp")
       .setBlendMode(Phaser.BlendModes.ADD)
       .setScale(0.5)
       .setDepth(10);
+    if (this.dawn) wisp.setTint(0xffd9a8);
     const light = this.lights.addLight(wisp.x, wisp.y, 300, this.dawn ? 0xffc590 : 0xffe6bf, 1.4);
 
     this.ambience.setStorm(false);

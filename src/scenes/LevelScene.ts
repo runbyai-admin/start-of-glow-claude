@@ -261,6 +261,7 @@ export class LevelScene extends Phaser.Scene {
     makeGlowTexture(this, "hearth", 46, "rgba(255,150,80,0.95)", "rgba(150,55,25,0.35)");
     makeGlowTexture(this, "hearth-halo", 150, "rgba(255,180,110,0.5)", "rgba(200,90,40,0.18)");
     makeGlowTexture(this, "ember", 18, "rgba(255,190,120,1)", "rgba(255,120,50,0.5)");
+    if (this.isKindle()) makeTreeTexture(this, "great-tree", 420, 700, 9);
     makeHazardTexture(this, `hazard-${this.config.index}`, 30, this.config.index * 97);
     makeSkyTexture(this, "sky", VIEW_WIDTH, VIEW_HEIGHT, 11);
     makeHillsTexture(this, "hills", 1760, 260, 3);
@@ -456,6 +457,19 @@ export class LevelScene extends Phaser.Scene {
   private buildHearths(): void {
     for (const state of hearthStates(HOLLOW_LAYOUT)) {
       const scale = state.final ? 1.5 : 0.9;
+      // The First Tree is a place, not a pickup: a dead giant looming over
+      // the east end of the Hollow with the final hearth as its heart. It
+      // takes the Light2D pipeline, so the moment its hearth lights, the
+      // trunk itself catches the glow.
+      if (state.final) {
+        this.add
+          .image(state.x, WORLD_HEIGHT - 60, "great-tree")
+          .setOrigin(0.5, 1)
+          .setScale(1.1)
+          .setTint(0x1a1016)
+          .setDepth(-25)
+          .setPipeline("Light2D");
+      }
       const halo = this.add
         .image(state.x, state.y, "hearth-halo")
         .setBlendMode(Phaser.BlendModes.ADD)
