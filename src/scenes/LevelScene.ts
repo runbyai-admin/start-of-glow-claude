@@ -1082,7 +1082,7 @@ export class LevelScene extends Phaser.Scene {
     hearth.light = this.lights.addLight(hearth.state.x, hearth.state.y, HEARTH_POOL_RADIUS, 0xffb070, litIntensity * 0.55);
     this.tweens.add({ targets: hearth.light, intensity: litIntensity, duration: 900, ease: "Sine.easeOut" });
     this.cameras.main.shake(90, 0.0014);
-    this.ambience.beaconOpen();
+    this.ambience.kindle(hearth.state.final);
 
     this.banishShadows(hearth.state.x, hearth.state.y);
     if (hearth.state.final) {
@@ -1814,7 +1814,8 @@ export class LevelScene extends Phaser.Scene {
    */
   private completeHollow(): void {
     this.locked = true;
-    this.ambience.levelComplete(true);
+    // No arpeggio on top - the final kindle's own deep swell (already
+    // playing) is the dawn's voice, and the ending scene brings its chord.
     for (const hearth of this.hearths) {
       if (!hearth.state.lit || !hearth.light) continue;
       this.tweens.add({

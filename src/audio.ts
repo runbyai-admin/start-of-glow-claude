@@ -305,6 +305,60 @@ export class Ambience {
   }
 
   /**
+   * A hearth takes the light - the Hollow's own voice, warmer and lower than
+   * the beacon's fifth: a low swell like fire catching, with a soft major
+   * bloom above it. The First Tree gets a longer, deeper version.
+   */
+  kindle(final = false): void {
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      const master = this.master;
+      const now = ctx.currentTime;
+      const swell = ctx.createOscillator();
+      swell.type = "sine";
+      swell.frequency.setValueAtTime(final ? 65.41 : 87.31, now);
+      swell.frequency.linearRampToValueAtTime(final ? 98.0 : 130.81, now + (final ? 1.6 : 0.9));
+      const swellGain = ctx.createGain();
+      swellGain.gain.setValueAtTime(0.0001, now);
+      swellGain.gain.linearRampToValueAtTime(final ? 0.22 : 0.16, now + 0.25);
+      swellGain.gain.exponentialRampToValueAtTime(0.0001, now + (final ? 2.6 : 1.5));
+      swell.connect(swellGain);
+      swellGain.connect(master);
+      swell.start(now);
+      swell.stop(now + (final ? 2.7 : 1.6));
+
+      const bloom: Array<[frequency: number, start: number]> = final
+        ? [
+            [220.0, 0.15],
+            [277.18, 0.35],
+            [329.63, 0.55],
+            [440.0, 0.85],
+          ]
+        : [
+            [220.0, 0.12],
+            [277.18, 0.3],
+          ];
+      for (const [freq, offset] of bloom) {
+        const start = now + offset;
+        const osc = ctx.createOscillator();
+        osc.type = "triangle";
+        osc.frequency.value = freq;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.linearRampToValueAtTime(0.1, start + 0.06);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.1);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(start);
+        osc.stop(start + 1.15);
+      }
+    } catch {
+      /* atmosphere only */
+    }
+  }
+
+  /**
    * A quick rising arpeggio - the level-complete payoff. A flawless level
    * (every mote found, not just the required ones) earns two extra steps up:
    * the fuller run is the reward for greed that paid off.
