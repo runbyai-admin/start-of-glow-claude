@@ -138,7 +138,9 @@ export class LevelScene extends Phaser.Scene {
   private hazards: Array<{
     img: Phaser.GameObjects.Image;
     light: Phaser.GameObjects.Light;
-    tween?: Phaser.Tweens.Tween;
+    /** Patrol path, walked in update() on the scene clock - see patrolStep(). */
+    waypoints: Phaser.Math.Vector2[];
+    nextWaypoint: number;
     alert: boolean;
     /** 0 at the edge of notice, 1 at hunting range - the speed-up ramps across it. */
     pressure: number;
@@ -427,6 +429,11 @@ export class LevelScene extends Phaser.Scene {
     const scale = this.isKindle() ? 0.8 : 0.55;
     for (const cfg of this.moteConfigs) {
       const mote = this.add.image(cfg.x, cfg.y, texture).setBlendMode(Phaser.BlendModes.ADD).setScale(scale).setDepth(5);
+      // Collection is judged against this, not the bobbing draw position: the
+      // bob tween rides the wall clock, and a pickup that depends on where the
+      // bob happens to be makes two replays of the same inputs disagree.
+      mote.setData("restX", cfg.x);
+      mote.setData("restY", cfg.y);
       this.tweens.add({
         targets: mote,
         y: cfg.y - rng.between(8, 21),
@@ -533,8 +540,6 @@ export class LevelScene extends Phaser.Scene {
         .setDepth(6)
         .setScale(rng.realInRange(0.85, 1.15));
       const light = this.lights.addLight(0, 0, 130, 0x9a6efa, CALM_LIGHT_INTENSITY);
-      const hazard = { img, light, alert: false, pressure: 0, slowUntil: 0 };
-      this.hazards.push(hazard);
 
       const waypoints: Phaser.Math.Vector2[] = [];
       if (authored) {
@@ -551,7 +556,35 @@ export class LevelScene extends Phaser.Scene {
       }
       img.setPosition(waypoints[0].x, waypoints[0].y);
       light.setPosition(waypoints[0].x, waypoints[0].y);
-      this.patrol(hazard, waypoints, 0);
+      this.hazards.push({ img, light, waypoints, nextWaypoint: 1, alert: false, pressure: 0, slowUntil: 0 });
+    }
+  }
+
+  /**
+   * Walk every patrol on the scene clock. This used to be a chain of tweens,
+   * but Phaser's TweenManager advances on Date.now() - under the fixed-step
+   * replay harness the shadows stood almost still while the wisp played a
+   * whole level, so every persona metric about danger was fiction. Constant
+   * speed along each leg, the alert/slow logic scaling dt exactly as it used
+   * to scale the tween.
+   */
+  private patrolStep(dt: number): void {
+    for (const h of this.hazards) {
+      const speed = this.config.hazardSpeed * this.hazardTimeScale(h);
+      let remaining = speed * dt;
+      while (remaining > 0) {
+        const next = h.waypoints[h.nextWaypoint % h.waypoints.length];
+        const dist = Phaser.Math.Distance.Between(h.img.x, h.img.y, next.x, next.y);
+        if (dist <= remaining) {
+          h.img.setPosition(next.x, next.y);
+          h.nextWaypoint = (h.nextWaypoint + 1) % h.waypoints.length;
+          remaining -= dist;
+        } else {
+          h.img.setPosition(h.img.x + ((next.x - h.img.x) / dist) * remaining, h.img.y + ((next.y - h.img.y) / dist) * remaining);
+          remaining = 0;
+        }
+      }
+      h.light.setPosition(h.img.x, h.img.y);
     }
   }
 
@@ -625,7 +658,6 @@ export class LevelScene extends Phaser.Scene {
       h.pressure = h.alert
         ? Phaser.Math.Clamp(1 - (dist - ALERT_RADIUS_FLOOR) / Math.max(1, notice - ALERT_RADIUS_FLOOR), 0, 1)
         : 0;
-      if (h.tween) h.tween.timeScale = this.hazardTimeScale(h);
       h.light.intensity = h.slowUntil > this.time.now
         ? 0.62
         : CALM_LIGHT_INTENSITY + (ALERT_LIGHT_INTENSITY - CALM_LIGHT_INTENSITY) * (h.alert ? 0.4 + 0.6 * h.pressure : 0);
@@ -640,30 +672,6 @@ export class LevelScene extends Phaser.Scene {
   private hazardTimeScale(hazard: { alert: boolean; pressure: number; slowUntil: number }): number {
     if (hazard.slowUntil > this.time.now) return RADIANCE_TIME_SCALE;
     return 1 + (ALERT_TIME_SCALE - 1) * hazard.pressure;
-  }
-
-  private patrol(
-    hazard: { img: Phaser.GameObjects.Image; light: Phaser.GameObjects.Light; tween?: Phaser.Tweens.Tween; alert: boolean; pressure: number; slowUntil: number },
-    waypoints: Phaser.Math.Vector2[],
-    index: number,
-  ): void {
-    const { img, light } = hazard;
-    const next = waypoints[(index + 1) % waypoints.length];
-    const dist = Phaser.Math.Distance.Between(img.x, img.y, next.x, next.y);
-    const duration = (dist / this.config.hazardSpeed) * 1000;
-    hazard.tween = this.tweens.add({
-      targets: img,
-      x: next.x,
-      y: next.y,
-      duration,
-      ease: "Sine.easeInOut",
-      onUpdate: () => light.setPosition(img.x, img.y),
-      onComplete: () => {
-        if (!img.active) return;
-        this.patrol(hazard, waypoints, index + 1);
-      },
-    });
-    hazard.tween.timeScale = this.hazardTimeScale(hazard);
   }
 
   private buildCamera(): void {
@@ -885,7 +893,7 @@ export class LevelScene extends Phaser.Scene {
     const caught: Array<{ mote: Phaser.GameObjects.Image; d: number }> = [];
     for (let i = this.motes.length - 1; i >= 0; i -= 1) {
       const mote = this.motes[i];
-      const d = Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y);
+      const d = this.moteRestDistance(mote, this.wisp.x, this.wisp.y);
       if (d > this.reach) continue;
       this.motes.splice(i, 1);
       this.incoming.push(mote);
@@ -1084,7 +1092,6 @@ export class LevelScene extends Phaser.Scene {
       const h = this.hazards[i];
       if (Phaser.Math.Distance.Between(h.img.x, h.img.y, x, y) > HEARTH_POOL_RADIUS) continue;
       this.hazards.splice(i, 1);
-      h.tween?.stop();
       this.tweens.add({
         targets: h.img,
         alpha: 0,
@@ -1124,6 +1131,8 @@ export class LevelScene extends Phaser.Scene {
         .setScale(0.8)
         .setAlpha(0.3)
         .setDepth(5);
+      ember.setData("restX", tx);
+      ember.setData("restY", ty);
       this.tweens.add({
         targets: ember,
         y: ty - rng.between(8, 18),
@@ -1362,6 +1371,7 @@ export class LevelScene extends Phaser.Scene {
     if (beforeExpiry !== this.chainState) this.clearChainDisplay();
     this.drawChainBoundary(time);
 
+    this.patrolStep(dt);
     for (const h of this.hazards) {
       this.hazardTrail.emitParticleAt(h.img.x, h.img.y, 1);
     }
@@ -1405,10 +1415,17 @@ export class LevelScene extends Phaser.Scene {
     }
   }
 
+  /** Where a mote counts as being for game rules - its authored rest point, not the bob. */
+  private moteRestDistance(mote: Phaser.GameObjects.Image, x: number, y: number): number {
+    const rx = (mote.getData("restX") as number | undefined) ?? mote.x;
+    const ry = (mote.getData("restY") as number | undefined) ?? mote.y;
+    return Phaser.Math.Distance.Between(rx, ry, x, y);
+  }
+
   private collectNearbyMotes(): void {
     for (let i = this.motes.length - 1; i >= 0; i -= 1) {
       const mote = this.motes[i];
-      if (Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y) > COLLECT_RADIUS) continue;
+      if (this.moteRestDistance(mote, this.wisp.x, this.wisp.y) > COLLECT_RADIUS) continue;
       this.motes.splice(i, 1);
       this.tweens.killTweensOf(mote);
       this.trail.explode(18, mote.x, mote.y);
@@ -1528,7 +1545,6 @@ export class LevelScene extends Phaser.Scene {
       const distance = Phaser.Math.Distance.Between(hazard.img.x, hazard.img.y, this.wisp.x, this.wisp.y);
       if (!hazard.alert || distance > RADIANCE_RADIUS) continue;
       hazard.slowUntil = this.time.now + RADIANCE_SLOW_MS;
-      if (hazard.tween) hazard.tween.timeScale = RADIANCE_TIME_SCALE;
       affected += 1;
     }
     this.ambience.radiance();
