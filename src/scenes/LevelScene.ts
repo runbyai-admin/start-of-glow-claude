@@ -1158,6 +1158,8 @@ export class LevelScene extends Phaser.Scene {
       });
       this.motes.push(ember);
     }
+    // New light on the ground is state the play driver steers by.
+    this.reportState();
   }
 
   /**
