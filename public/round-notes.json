@@ -1,11 +1,11 @@
 {
   "$comment": "What this build changed this round, shown to the judge by src/round-notes.ts. Overwrite every round: your round number and 4-5 one-liners. npm run check validates the shape.",
-  "round": 4,
+  "round": 5,
   "notes": [
-    "A pull now spends the whole glow and only travel earns it back - a press cannot pay for itself",
-    "The resource is a halo on the wisp: a cold blue arc while spent, a complete warm gold circle when ready",
-    "The lumen chain waits until level 3, so the opening carries one resource instead of two timers",
-    "Levels 2 and 3 are hand-authored - required routes clear every patrol, shortcut motes sit inside the gates",
-    "A press while spent is answered with a cold collapsing ring and a dead voice, not swallowed"
+    "A fourth act: THE HOLLOW, a burnt-black wood behind the third beacon where the game's one verb reverses - press to GIVE light, not take it",
+    "Kindling a hearth spends the whole reach; the hearth burns forever, banishes any shadow in its pool, and scatters embers to walk through",
+    "Dying in the Hollow wakes you at the last hearth you lit - every kindle is also a foothold",
+    "Light the First Tree once all five hearths burn and the game ends in an earned dawn, not a fade to black",
+    "Jump straight there with ?level=4 if you have already walked the forest"
   ]
 }

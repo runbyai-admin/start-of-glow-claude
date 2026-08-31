@@ -21,6 +21,18 @@ import {
   spendReach,
   type MoteArrival,
 } from "../reach";
+import {
+  EMBER_RESTORE,
+  EMBERS_PER_HEARTH,
+  HEARTH_BREATH_MAX_STANDING,
+  HEARTH_BREATH_MS,
+  HEARTH_POOL_RADIUS,
+  HOLLOW_LAYOUT,
+  hearthStates,
+  finalUnlocked,
+  kindleTarget,
+  type HearthState,
+} from "../hollow";
 
 const COLLECT_RADIUS = 45;
 const HAZARD_RADIUS = 34;
@@ -94,6 +106,10 @@ const MOOD_TINT: Record<LevelConfig["mood"], { tree: number[]; ground: number; h
   dusk: { tree: [0x1b2438, 0x161d2e, 0x141a2a], ground: 0x10151f, hillsTint: 0x0d1526 },
   "deep-night": { tree: [0x141a2c, 0x101624, 0x0e1220], ground: 0x0b0f18, hillsTint: 0x0a0f1e },
   "storm-dark": { tree: [0x171226, 0x120e1e, 0x0f0c1a], ground: 0x0d0a16, hillsTint: 0x120c22 },
+  // The Hollow: burnt wood, no blue left in it. The sky is tinted down in
+  // buildSky and the fireflies stay away - a kindled hearth is the only
+  // living light this act starts with.
+  "ember-dark": { tree: [0x201014, 0x180c10, 0x120a0c], ground: 0x0e0806, hillsTint: 0x120808 },
 };
 
 /**
@@ -148,6 +164,25 @@ export class LevelScene extends Phaser.Scene {
   private inviteShown = 0;
   private incoming: Phaser.GameObjects.Image[] = [];
 
+  /** The Hollow's hearths - empty in gather levels. See src/hollow.ts. */
+  private hearths: Array<{
+    state: HearthState;
+    img: Phaser.GameObjects.Image;
+    halo: Phaser.GameObjects.Image;
+    light?: Phaser.GameObjects.Light;
+    breathAt: number;
+  }> = [];
+  private kindles = 0;
+  private kindleLine?: Phaser.GameObjects.Text;
+  /**
+   * Kindles in flight, keyed to GAME time. Phaser's TweenManager runs on
+   * Date.now() (wall clock), so under the fixed-step replay harness a tween
+   * crawls relative to game frames - fine for decoration, fatal for progress.
+   * Anything that gates state lives here and resolves in update().
+   */
+  private pendingKindles: Array<{ hearth: number; igniteAt: number }> = [];
+  private hollowEndAt = 0;
+
   private collected = 0;
   /** Motes actually placed this level - derived from the data used, never assumed from config. */
   private totalMotes = 0;
@@ -201,7 +236,17 @@ export class LevelScene extends Phaser.Scene {
     this.motes = [];
     this.incoming = [];
     this.hazards = [];
+    this.hearths = [];
+    this.kindles = 0;
+    this.kindleLine = undefined;
+    this.pendingKindles = [];
+    this.hollowEndAt = 0;
     this.target.set(START_X, START_Y);
+  }
+
+  /** The Hollow reverses the verb - almost every branch in this scene keys off this. */
+  private isKindle(): boolean {
+    return this.config.kind === "kindle";
   }
 
   preload(): void {
@@ -211,6 +256,9 @@ export class LevelScene extends Phaser.Scene {
     makeGlowTexture(this, "firefly", 12, "rgba(226,255,196,1)", "rgba(198,255,130,0.4)");
     makeGlowTexture(this, "beacon", 170, "rgba(255,226,168,1)", "rgba(255,182,102,0.4)");
     makeGlowTexture(this, "shadow-spark", 10, "rgba(150,110,220,0.85)", "rgba(90,50,150,0.3)");
+    makeGlowTexture(this, "hearth", 46, "rgba(255,150,80,0.95)", "rgba(150,55,25,0.35)");
+    makeGlowTexture(this, "hearth-halo", 150, "rgba(255,180,110,0.5)", "rgba(200,90,40,0.18)");
+    makeGlowTexture(this, "ember", 18, "rgba(255,190,120,1)", "rgba(255,120,50,0.5)");
     makeHazardTexture(this, `hazard-${this.config.index}`, 30, this.config.index * 97);
     makeSkyTexture(this, "sky", VIEW_WIDTH, VIEW_HEIGHT, 11);
     makeHillsTexture(this, "hills", 1760, 260, 3);
@@ -227,12 +275,16 @@ export class LevelScene extends Phaser.Scene {
     this.buildSky();
     this.buildHills();
     this.buildForest();
-    this.buildBeacon();
-    this.buildFireflies();
+    if (!this.isKindle()) {
+      this.buildBeacon();
+      this.buildFireflies();
+    }
     this.buildMotes();
+    if (this.isKindle()) this.buildHearths();
     this.buildWisp();
     this.buildHazards();
     this.buildStorm();
+    this.buildAsh();
     this.buildCamera();
     this.buildVignette();
     this.buildHud();
@@ -246,7 +298,32 @@ export class LevelScene extends Phaser.Scene {
   }
 
   private buildSky(): void {
-    this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setScrollFactor(0).setDepth(-100);
+    const sky = this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setScrollFactor(0).setDepth(-100);
+    // The Hollow has no night sky worth the name: the stars are choked to a
+    // dim rust wash, so the first kindled hearth visibly gives the act its light.
+    if (this.isKindle()) sky.setTint(0x55261a).setAlpha(0.8);
+  }
+
+  /**
+   * Ash instead of fireflies: the Hollow's air is full of dead light, falling
+   * slowly. Purely atmospheric, and grey on purpose - everything warm in this
+   * act has to be something the player lit.
+   */
+  private buildAsh(): void {
+    if (!this.isKindle()) return;
+    const ash = this.add.particles(0, 0, "spark", {
+      x: { min: -60, max: VIEW_WIDTH + 60 },
+      y: { min: -40, max: VIEW_HEIGHT },
+      speedX: { min: -14, max: 10 },
+      speedY: { min: 8, max: 26 },
+      lifespan: { min: 2600, max: 5200 },
+      scale: { start: 0.28, end: 0.08 },
+      alpha: { start: 0.2, end: 0 },
+      quantity: 1,
+      frequency: 90,
+      tint: [0x6a5f58, 0x4a423d, 0x84766c],
+    });
+    ash.setScrollFactor(0.85).setDepth(-6);
   }
 
   private buildHills(): void {
@@ -317,6 +394,13 @@ export class LevelScene extends Phaser.Scene {
   }
 
   private buildMotes(): void {
+    if (this.isKindle()) {
+      // Wild embers: the Hollow's only walking food before a hearth burns.
+      this.moteConfigs = HOLLOW_LAYOUT.embers.map((m) => ({ ...m }));
+      this.totalMotes = this.moteConfigs.length;
+      this.spawnMotes();
+      return;
+    }
     if (this.config.layout) {
       this.moteConfigs = this.config.layout.motes.map((m) => ({ ...m }));
     } else {
@@ -339,8 +423,10 @@ export class LevelScene extends Phaser.Scene {
     this.motes = [];
     this.incoming = [];
     const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-motes-${this.config.index}`]);
+    const texture = this.isKindle() ? "ember" : "mote";
+    const scale = this.isKindle() ? 0.8 : 0.55;
     for (const cfg of this.moteConfigs) {
-      const mote = this.add.image(cfg.x, cfg.y, "mote").setBlendMode(Phaser.BlendModes.ADD).setScale(0.55).setDepth(5);
+      const mote = this.add.image(cfg.x, cfg.y, texture).setBlendMode(Phaser.BlendModes.ADD).setScale(scale).setDepth(5);
       this.tweens.add({
         targets: mote,
         y: cfg.y - rng.between(8, 21),
@@ -351,6 +437,41 @@ export class LevelScene extends Phaser.Scene {
         ease: "Sine.easeInOut",
       });
       this.motes.push(mote);
+    }
+  }
+
+  /**
+   * The Hollow's hearths: dormant embers barely holding on, each waiting to
+   * take a full press of light. The First Tree renders bigger and darker -
+   * it visibly belongs to the same family but is not takeable until every
+   * lesser hearth burns (src/hollow.ts kindleTarget owns that rule).
+   */
+  private buildHearths(): void {
+    for (const state of hearthStates(HOLLOW_LAYOUT)) {
+      const scale = state.final ? 1.5 : 0.9;
+      const halo = this.add
+        .image(state.x, state.y, "hearth-halo")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setScale(scale)
+        .setAlpha(0)
+        .setDepth(3);
+      const img = this.add
+        .image(state.x, state.y, "hearth")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setScale(scale * 0.7)
+        .setAlpha(0.28)
+        .setDepth(5);
+      // A dormant hearth barely breathes - enough to be findable in the dark,
+      // never enough to light anything.
+      this.tweens.add({
+        targets: img,
+        alpha: { from: 0.18, to: 0.4 },
+        duration: 1700 + state.x % 900,
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+      this.hearths.push({ state, img, halo, breathAt: 0 });
     }
   }
 
@@ -404,7 +525,8 @@ export class LevelScene extends Phaser.Scene {
     this.hazardTrail = trailEmitter;
 
     const rng = new Phaser.Math.RandomDataGenerator([`start-of-glow-hazards-${this.config.index}`]);
-    const count = this.config.layout ? this.config.layout.hazards.length : this.config.hazardCount;
+    const authored = this.isKindle() ? HOLLOW_LAYOUT.hazards : this.config.layout?.hazards;
+    const count = authored ? authored.length : this.config.hazardCount;
     for (let i = 0; i < count; i += 1) {
       const img = this.add
         .image(0, 0, `hazard-${this.config.index}`)
@@ -415,8 +537,8 @@ export class LevelScene extends Phaser.Scene {
       this.hazards.push(hazard);
 
       const waypoints: Phaser.Math.Vector2[] = [];
-      if (this.config.layout) {
-        for (const w of this.config.layout.hazards[i]) {
+      if (authored) {
+        for (const w of authored[i]) {
           waypoints.push(new Phaser.Math.Vector2(w.x, w.y));
         }
       } else {
@@ -594,24 +716,27 @@ export class LevelScene extends Phaser.Scene {
     // being the player's problem.
     if (this.taught || this.locked || this.inviteShown >= 6 || this.inviteAt > this.time.now) return;
     let inReach = false;
-    for (const mote of this.motes) {
-      if (Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y) <= this.reach) {
+    for (const t of this.pressTargets()) {
+      if (Phaser.Math.Distance.Between(t.x, t.y, this.wisp.x, this.wisp.y) <= this.reach) {
         inReach = true;
         break;
       }
     }
     if (!inReach) return;
     this.inviteAt = this.time.now + 2100;
+    // The ghost plays the press it is asking for: collapsing inward in the
+    // forest (the pull), blooming outward in the Hollow (the gift).
+    const kindle = this.isKindle();
     const ghost = this.add
-      .circle(this.wisp.x, this.wisp.y, this.reach, 0xffe2a8, 0)
-      .setStrokeStyle(2, 0xffe2a8, 0.3)
+      .circle(this.wisp.x, this.wisp.y, kindle ? 18 : this.reach, kindle ? 0xffb070 : 0xffe2a8, 0)
+      .setStrokeStyle(2, kindle ? 0xffb070 : 0xffe2a8, 0.3)
       .setDepth(4);
     this.tweens.add({
       targets: ghost,
-      radius: 18,
+      radius: kindle ? this.reach : 18,
       alpha: 0,
       duration: 900,
-      ease: "Cubic.easeIn",
+      ease: kindle ? "Cubic.easeOut" : "Cubic.easeIn",
       onUpdate: () => ghost.setPosition(this.wisp.x, this.wisp.y),
       onComplete: () => ghost.destroy(),
     });
@@ -654,7 +779,7 @@ export class LevelScene extends Phaser.Scene {
     });
 
     this.openLine = this.add
-      .text(VIEW_WIDTH / 2, 80, "the beacon is lit", {
+      .text(VIEW_WIDTH / 2, 80, this.isKindle() ? "the first tree will take the light now" : "the beacon is lit", {
         fontFamily: "Georgia, 'Times New Roman', serif",
         fontSize: "17px",
         color: "#ffd9a0",
@@ -675,6 +800,23 @@ export class LevelScene extends Phaser.Scene {
         .setAlpha(0)
         .setDepth(100)
         .setScrollFactor(0);
+    }
+
+    // The Hollow reverses the one verb the player has spent three levels
+    // learning, so this line does not wait to be earned: it shows on arrival
+    // and leaves at the first kindle.
+    if (this.isKindle()) {
+      this.kindleLine = this.add
+        .text(VIEW_WIDTH / 2, VIEW_HEIGHT - 54, "the hearths are cold · press to give the light back", {
+          fontFamily: "Georgia, 'Times New Roman', serif",
+          fontSize: "17px",
+          color: "#ffbe8a",
+        })
+        .setOrigin(0.5)
+        .setAlpha(0)
+        .setDepth(100)
+        .setScrollFactor(0);
+      this.tweens.add({ targets: this.kindleLine, alpha: 0.8, duration: 1200, delay: 1400, ease: "Sine.easeOut" });
     }
 
     this.chainArc = this.add.graphics().setDepth(95).setScrollFactor(0);
@@ -727,6 +869,10 @@ export class LevelScene extends Phaser.Scene {
       this.reportState();
       return;
     }
+    if (this.isKindle()) {
+      this.kindlePress();
+      return;
+    }
     this.gathers += 1;
     if (!this.taught) {
       this.taught = true;
@@ -775,6 +921,238 @@ export class LevelScene extends Phaser.Scene {
         onComplete: () => this.absorb(mote),
       });
     });
+  }
+
+  /**
+   * The Hollow's press: give the light. The nearest dormant hearth inside the
+   * reach takes the whole press - the same cost as the forest's pull, spent
+   * the other way. With nothing in range the light stays put: income here is
+   * finite, so the press only spends when something is there to receive it
+   * (a soft outward ring answers the hand either way).
+   */
+  private kindlePress(): void {
+    const target = kindleTarget(
+      this.hearths.map((h) => h.state),
+      this.wisp.x,
+      this.wisp.y,
+      this.reach,
+    );
+    if (target < 0) {
+      this.kindleRefused();
+      this.reportState();
+      return;
+    }
+    this.gathers += 1;
+    this.kindles += 1;
+    if (!this.taught) this.taught = true;
+    if (this.kindleLine) {
+      this.tweens.killTweensOf(this.kindleLine);
+      this.tweens.add({ targets: this.kindleLine, alpha: 0, duration: 420 });
+    }
+
+    const hearth = this.hearths[target];
+    const spent = this.reach;
+    this.setReach(spendReach(this.reach));
+    this.pulseBoost = 1.2;
+
+    // The reach leaves the wisp as a visible gift: an outward ring, and a
+    // filament of light that runs from the wisp into the hearth.
+    const ring = this.add
+      .circle(this.wisp.x, this.wisp.y, 20, 0xffb070, 0)
+      .setStrokeStyle(3, 0xffb070, 0.85)
+      .setDepth(7);
+    this.tweens.add({
+      targets: ring,
+      radius: spent,
+      alpha: 0,
+      duration: 460,
+      ease: "Cubic.easeOut",
+      onComplete: () => ring.destroy(),
+    });
+    // The beam is decorative and may run slow under replay; the ignition is
+    // progress and therefore rides GAME time via pendingKindles (see update()).
+    const beam = this.add.graphics().setDepth(7);
+    const from = { x: this.wisp.x, y: this.wisp.y };
+    const progress = { t: 0 };
+    this.tweens.add({
+      targets: progress,
+      t: 1,
+      duration: 340,
+      ease: "Cubic.easeIn",
+      onUpdate: () => {
+        beam.clear();
+        beam.lineStyle(3, 0xffc088, 0.85 * (1 - progress.t * 0.4));
+        beam.lineBetween(
+          from.x + (hearth.state.x - from.x) * progress.t,
+          from.y + (hearth.state.y - from.y) * progress.t,
+          hearth.state.x,
+          hearth.state.y,
+        );
+      },
+      onComplete: () => beam.destroy(),
+    });
+    this.pendingKindles.push({ hearth: this.hearths.indexOf(hearth), igniteAt: this.time.now + 340 });
+    this.ambience.gather(1);
+    this.updateHud();
+    this.reportState();
+  }
+
+  /** Resolve in-flight kindles and the dawn on the scene clock, never the tween clock. */
+  private resolveKindles(): void {
+    for (let i = this.pendingKindles.length - 1; i >= 0; i -= 1) {
+      const pending = this.pendingKindles[i];
+      if (this.time.now < pending.igniteAt) continue;
+      this.pendingKindles.splice(i, 1);
+      this.igniteHearth(this.hearths[pending.hearth]);
+    }
+  }
+
+  /** Nothing in range to take the light - the press answers but does not spend. */
+  private kindleRefused(): void {
+    this.ambience.gather(0);
+    const ring = this.add
+      .circle(this.wisp.x, this.wisp.y, 26, 0xd8926a, 0)
+      .setStrokeStyle(2, 0xd8926a, 0.5)
+      .setDepth(8);
+    this.tweens.add({
+      targets: ring,
+      radius: 64,
+      alpha: 0,
+      duration: 320,
+      ease: "Cubic.easeOut",
+      onUpdate: () => ring.setPosition(this.wisp.x, this.wisp.y),
+      onComplete: () => ring.destroy(),
+    });
+  }
+
+  /** A hearth takes the light: permanent terrain, a banish, and an ember gift. */
+  private igniteHearth(hearth: (typeof this.hearths)[number]): void {
+    hearth.state.lit = true;
+    hearth.breathAt = this.time.now + HEARTH_BREATH_MS;
+    this.tweens.killTweensOf(hearth.img);
+    hearth.img.setAlpha(1);
+    const scale = hearth.state.final ? 1.5 : 0.9;
+    this.tweens.add({
+      targets: hearth.img,
+      scale: { from: scale * 0.7, to: scale },
+      alpha: { from: 1, to: 0.92 },
+      duration: 700,
+      ease: "Back.easeOut",
+    });
+    // Baseline first, tween the rest: tweens ride the wall clock, so under
+    // the replay harness a from-zero fade can leave a lit hearth looking dark.
+    hearth.halo.setAlpha(0.35);
+    this.tweens.add({
+      targets: hearth.halo,
+      alpha: { from: 0.35, to: 0.75 },
+      duration: 900,
+      ease: "Sine.easeOut",
+    });
+    this.tweens.add({
+      targets: hearth.halo,
+      scale: { from: hearth.halo.scale, to: hearth.halo.scale * 1.12 },
+      duration: 2400,
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+    const litIntensity = hearth.state.final ? 2.6 : 1.7;
+    hearth.light = this.lights.addLight(hearth.state.x, hearth.state.y, HEARTH_POOL_RADIUS, 0xffb070, litIntensity * 0.55);
+    this.tweens.add({ targets: hearth.light, intensity: litIntensity, duration: 900, ease: "Sine.easeOut" });
+    this.cameras.main.shake(90, 0.0014);
+    this.ambience.beaconOpen();
+
+    this.banishShadows(hearth.state.x, hearth.state.y);
+    if (hearth.state.final) {
+      this.completeHollow();
+    } else {
+      this.releaseEmbers(hearth, EMBERS_PER_HEARTH);
+      if (finalUnlocked(this.hearths.map((h) => h.state))) this.showOpenLine();
+    }
+    this.updateHud();
+    this.reportState();
+  }
+
+  /**
+   * Light as a weapon, once per hearth: any shadow standing in the new pool
+   * when it ignites is unmade. This is the Hollow's answer to the forest's
+   * radiance - not a slow, an erasure - and it makes WHERE to spend a press
+   * a tactical question, not only an economic one.
+   */
+  private banishShadows(x: number, y: number): void {
+    for (let i = this.hazards.length - 1; i >= 0; i -= 1) {
+      const h = this.hazards[i];
+      if (Phaser.Math.Distance.Between(h.img.x, h.img.y, x, y) > HEARTH_POOL_RADIUS) continue;
+      this.hazards.splice(i, 1);
+      h.tween?.stop();
+      this.tweens.add({
+        targets: h.img,
+        alpha: 0,
+        scale: h.img.scale * 1.8,
+        duration: 620,
+        ease: "Sine.easeOut",
+        onComplete: () => h.img.destroy(),
+      });
+      this.tweens.add({
+        targets: h.light,
+        intensity: 0,
+        duration: 620,
+        onComplete: () => this.lights.removeLight(h.light),
+      });
+      this.hazardTrail.explode(22, h.img.x, h.img.y);
+      this.ambience.radiance();
+    }
+  }
+
+  /** Embers drift out of a lit hearth into its pool and become touchable light. */
+  private releaseEmbers(hearth: (typeof this.hearths)[number], count: number): void {
+    const rng = new Phaser.Math.RandomDataGenerator([
+      `hollow-embers-${hearth.state.x}-${this.collected}-${this.kindles}`,
+    ]);
+    for (let i = 0; i < count; i += 1) {
+      const angle = rng.realInRange(0, Math.PI * 2);
+      const dist = rng.realInRange(70, HEARTH_POOL_RADIUS * 0.85);
+      const tx = Phaser.Math.Clamp(hearth.state.x + Math.cos(angle) * dist, 40, WORLD_WIDTH - 40);
+      const ty = Phaser.Math.Clamp(hearth.state.y + Math.sin(angle) * dist, 100, WORLD_HEIGHT - 60);
+      // Placed at its rest position from frame one: collection is gameplay,
+      // and a positional flight tween would let a player standing on the
+      // hearth swallow the whole gift before it scattered. The pop-in is
+      // purely cosmetic.
+      const ember = this.add
+        .image(tx, ty, "ember")
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setScale(0.8)
+        .setAlpha(0.3)
+        .setDepth(5);
+      this.tweens.add({
+        targets: ember,
+        y: ty - rng.between(8, 18),
+        alpha: { from: 0.6, to: 1 },
+        duration: rng.between(1200, 2000),
+        yoyo: true,
+        repeat: -1,
+        ease: "Sine.easeInOut",
+      });
+      this.motes.push(ember);
+    }
+  }
+
+  /**
+   * The slow income: a lit hearth breathes one ember at a time, and only while
+   * its pool is nearly bare - counting the live embers around it rather than
+   * bookkeeping, so a collected ember re-opens the tap by itself.
+   */
+  private breatheHearths(): void {
+    for (const hearth of this.hearths) {
+      if (!hearth.state.lit || hearth.state.final) continue;
+      if (this.time.now < hearth.breathAt) continue;
+      hearth.breathAt = this.time.now + HEARTH_BREATH_MS;
+      const standing = this.motes.filter(
+        (m) => Phaser.Math.Distance.Between(m.x, m.y, hearth.state.x, hearth.state.y) <= HEARTH_POOL_RADIUS,
+      ).length;
+      if (standing >= HEARTH_BREATH_MAX_STANDING) continue;
+      this.releaseEmbers(hearth, 1);
+    }
   }
 
   /** A spent press answers immediately, but cannot pull or hide its state. */
@@ -844,13 +1222,21 @@ export class LevelScene extends Phaser.Scene {
     this.wisp.setScale(0.34 + (this.reach / REACH_MAX) * 0.42);
   }
 
+  /** The world positions a press would act on right now - motes in the forest, dormant hearths in the Hollow. */
+  private pressTargets(): Array<{ x: number; y: number }> {
+    if (!this.isKindle()) return this.motes;
+    const treeReady = finalUnlocked(this.hearths.map((h) => h.state));
+    return this.hearths.filter((h) => !h.state.lit && (!h.state.final || treeReady)).map((h) => h.state);
+  }
+
   /** Draw the edge of the reach, bright only while it has something in it. */
   private drawReachRing(time: number): void {
     this.reachRing.clear();
     if (this.locked) return;
+    const targets = this.pressTargets();
     let inReach = false;
-    for (const mote of this.motes) {
-      if (Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y) <= this.reach) {
+    for (const t of targets) {
+      if (Phaser.Math.Distance.Between(t.x, t.y, this.wisp.x, this.wisp.y) <= this.reach) {
         inReach = true;
         break;
       }
@@ -880,13 +1266,15 @@ export class LevelScene extends Phaser.Scene {
     );
     this.reachRing.strokePath();
 
-    // A filament to each mote in reach: what the press will take, before it is pressed.
+    // A filament to each target in reach: what the press will take - or, in
+    // the Hollow, what it will give to - before it is pressed.
     if (!inReach) return;
-    for (const mote of this.motes) {
-      const d = Phaser.Math.Distance.Between(mote.x, mote.y, this.wisp.x, this.wisp.y);
+    const filament = this.isKindle() ? 0xffb070 : 0xffe2a8;
+    for (const t of targets) {
+      const d = Phaser.Math.Distance.Between(t.x, t.y, this.wisp.x, this.wisp.y);
       if (d > this.reach) continue;
-      this.reachRing.lineStyle(1, 0xffe2a8, 0.16 + 0.26 * (1 - d / this.reach));
-      this.reachRing.lineBetween(this.wisp.x, this.wisp.y, mote.x, mote.y);
+      this.reachRing.lineStyle(1, filament, 0.16 + 0.26 * (1 - d / this.reach));
+      this.reachRing.lineBetween(this.wisp.x, this.wisp.y, t.x, t.y);
     }
   }
 
@@ -920,6 +1308,11 @@ export class LevelScene extends Phaser.Scene {
   }
 
   update(time: number, delta: number): void {
+    // The dawn handoff must fire while the scene is locked for the epilogue.
+    if (this.hollowEndAt > 0 && time >= this.hollowEndAt) {
+      this.hollowEndAt = 0;
+      this.finishHollow();
+    }
     if (this.locked) return;
 
     const dt = delta / 1000;
@@ -981,6 +1374,10 @@ export class LevelScene extends Phaser.Scene {
     if (this.levelClear) {
       this.checkBeaconArrival();
     }
+    if (this.isKindle()) {
+      this.resolveKindles();
+      this.breatheHearths();
+    }
 
     // Keep the published positions live between collect/fail events, so a
     // scripted play run can steer by them - telemetry a human player already
@@ -1037,6 +1434,21 @@ export class LevelScene extends Phaser.Scene {
    * a press, and is drawn continuously by the halo around the wisp.
    */
   private takeMote(arrival: MoteArrival): void {
+    if (this.isKindle()) {
+      // An ember. No chain, no beacon math - it rekindles the reach harder
+      // than forest light does (see EMBER_RESTORE), because embers are the
+      // Hollow's whole income and every one has to feel like fuel.
+      this.collected += 1;
+      this.ambience.chime(this.collected, 1);
+      const wasReady = reachReady(this.reach);
+      this.setReach(Math.min(REACH_MAX, this.reach + EMBER_RESTORE));
+      this.touchedMotes += 1;
+      if (!wasReady && reachReady(this.reach)) this.kindleReach();
+      this.collectionImpact();
+      this.updateHud();
+      this.reportState();
+      return;
+    }
     this.collected += 1;
     // The opening belongs to the pull and its cost. The inherited five-light
     // chain is a useful escalation later, but its corner timer and radiance
@@ -1273,9 +1685,25 @@ export class LevelScene extends Phaser.Scene {
     this.resetChain();
 
     this.after(560, () => {
-      this.target.set(START_X, START_Y);
-      this.wisp.setPosition(START_X, START_Y);
-      this.wispLight.setPosition(START_X, START_Y);
+      // In the Hollow a lit hearth keeps your light: you wake at the nearest
+      // one you kindled, not at the door. Every kindle is also a foothold.
+      let respawnX = START_X;
+      let respawnY = START_Y;
+      if (this.isKindle()) {
+        let best = Infinity;
+        for (const hearth of this.hearths) {
+          if (!hearth.state.lit || hearth.state.final) continue;
+          const d = Phaser.Math.Distance.Between(hearth.state.x, hearth.state.y, this.wisp.x, this.wisp.y);
+          if (d < best) {
+            best = d;
+            respawnX = hearth.state.x;
+            respawnY = Math.min(hearth.state.y + 40, WORLD_HEIGHT - 60);
+          }
+        }
+      }
+      this.target.set(respawnX, respawnY);
+      this.wisp.setPosition(respawnX, respawnY);
+      this.wispLight.setPosition(respawnX, respawnY);
       // What a shadow takes is your light, not your work. The old fail wiped
       // the level's motes and started it again, which at twenty seconds in is
       // the moment a player stops playing - and it punished the one thing the
@@ -1349,7 +1777,68 @@ export class LevelScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * The First Tree takes the light: dawn. The sky the whole game has kept
+   * black warms from the horizon up, every hearth flares in answer, and the
+   * ending arrives as the payoff of everything given, not a fade to more dark.
+   */
+  private completeHollow(): void {
+    this.locked = true;
+    this.ambience.levelComplete(true);
+    for (const hearth of this.hearths) {
+      if (!hearth.state.lit || !hearth.light) continue;
+      this.tweens.add({
+        targets: hearth.light,
+        intensity: 3,
+        radius: HEARTH_POOL_RADIUS * 1.6,
+        duration: 2200,
+        ease: "Sine.easeOut",
+      });
+    }
+    // Dawn is a slow additive wash rising from warm rust to pale gold - the
+    // one moment the game is allowed to be bright, and it is earned light.
+    const dawn = this.add
+      .rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, VIEW_WIDTH, VIEW_HEIGHT, 0xff9a50)
+      .setScrollFactor(0)
+      .setAlpha(0)
+      .setDepth(92)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    this.tweens.add({ targets: dawn, alpha: 0.34, duration: 2600, ease: "Sine.easeIn" });
+    this.tweens.add({
+      targets: this.wispLight,
+      intensity: 3,
+      radius: 900,
+      duration: 2600,
+      ease: "Sine.easeOut",
+    });
+    // Game-time handoff (see pendingKindles) - update() calls finishHollow().
+    this.hollowEndAt = this.time.now + 2900;
+  }
+
+  private finishHollow(): void {
+    const hearthsLit = this.hearths.filter((h) => h.state.lit).length;
+    this.cameras.main.fadeOut(900, 40, 24, 16);
+    this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
+      this.scene.start("ending", {
+        ambience: this.ambience,
+        resets: this.resets,
+        flawless: this.flawlessLevels,
+        dawn: true,
+        hearths: hearthsLit,
+      });
+    });
+  }
+
   private updateHud(): void {
+    if (this.isKindle()) {
+      const lit = this.hearths.filter((h) => h.state.lit && !h.state.final).length;
+      const total = this.hearths.filter((h) => !h.state.final).length;
+      const treeSegment = finalUnlocked(this.hearths.map((h) => h.state))
+        ? "the first tree will take the light"
+        : `the first tree waits`;
+      this.hud.setText(`THE HOLLOW   hearths ${lit}/${total} · ${treeSegment}   resets ${this.resets}`);
+      return;
+    }
     const moteSegment = this.flawlessNow
       ? `motes ${this.collected}/${this.totalMotes} · flawless`
       : this.levelClear
@@ -1390,6 +1879,14 @@ export class LevelScene extends Phaser.Scene {
       chainRemainingMs: Math.max(0, Math.round(this.chainState.deadline - this.time.now)),
       radianceWaves: this.chainState.waves,
       slowedHazards: this.hazards.filter((h) => h.slowUntil > this.time.now).length,
+      ...(this.isKindle()
+        ? {
+            hearthsLit: this.hearths.filter((h) => h.state.lit && !h.state.final).length,
+            hearthsTotal: this.hearths.filter((h) => !h.state.final).length,
+            hearths: this.hearths.map((h) => ({ x: h.state.x, y: h.state.y, lit: h.state.lit, final: h.state.final })),
+            kindles: this.kindles,
+          }
+        : {}),
     };
   }
 }

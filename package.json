@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 4183 --strictPort",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/chain.test.ts tests/levels.test.ts tests/reach.test.ts tests/play-dsl.test.ts && playwright test && npm run build && node scripts/replay-gate.mjs",
+    "test": "node --test --experimental-strip-types tests/chain.test.ts tests/levels.test.ts tests/reach.test.ts tests/hollow.test.ts tests/play-dsl.test.ts && playwright test && npm run build && node scripts/replay-gate.mjs",
     "play": "node scripts/play.mjs",
     "check": "node scripts/check-workspace.mjs && node scripts/ledger.mjs check && npm run typecheck",
     "ledger": "node scripts/ledger.mjs",

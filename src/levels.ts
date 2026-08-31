@@ -31,8 +31,14 @@ export interface LevelConfig {
   /** CSS px/second along each hazard's patrol path. */
   hazardSpeed: number;
   /** Sky seed, forest tint, and - for storm-dark - a real weather layer (see LevelScene.buildStorm). */
-  mood: "dusk" | "deep-night" | "storm-dark";
+  mood: "dusk" | "deep-night" | "storm-dark" | "ember-dark";
   layout?: LevelLayout;
+  /**
+   * "gather" (default) is the forest: press to pull light in. "kindle" is the
+   * Hollow: press to give light to a dormant hearth (src/hollow.ts owns that
+   * act's layout and economy; `layout`, moteCount and requiredMotes are unused).
+   */
+  kind?: "gather" | "kindle";
 }
 
 /**
@@ -227,6 +233,16 @@ export const LEVELS: LevelConfig[] = [
     hazardSpeed: 120,
     mood: "storm-dark",
     layout: LEVEL_3_LAYOUT,
+  },
+  {
+    index: 4,
+    name: "The Hollow",
+    moteCount: 0,
+    requiredMotes: 0,
+    hazardCount: 3,
+    hazardSpeed: 100,
+    mood: "ember-dark",
+    kind: "kindle",
   },
 ];
 

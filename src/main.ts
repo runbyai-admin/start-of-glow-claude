@@ -54,3 +54,6 @@ if (replay) installReplay(game, replay);
 // The judge-facing "what changed this round" badge. DOM-only and skipped in
 // replay mode, so captures and personas never see it.
 if (!replay) void installRoundNotes();
+
+// Debug handle for the play driver's inspector - harmless in production.
+(window as unknown as { __game?: Phaser.Game }).__game = game;

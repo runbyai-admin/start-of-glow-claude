@@ -37,6 +37,11 @@ interface GlowTestState {
   /** Number of cap waves released in this level attempt and hazards currently slowed. */
   radianceWaves?: number;
   slowedHazards?: number;
+  /** The Hollow (act 4) only: hearth progress and positions for scripted play. */
+  hearthsLit?: number;
+  hearthsTotal?: number;
+  hearths?: Array<{ x: number; y: number; lit: boolean; final: boolean }>;
+  kindles?: number;
 }
 
 interface Window {

@@ -8,6 +8,9 @@ interface EndingInitData {
   resets: number;
   /** Flawless levels (every mote found) completed this run. */
   flawless?: number;
+  /** The run came through the Hollow: the light was given back, and dawn is earned. */
+  dawn?: boolean;
+  hearths?: number;
 }
 
 /**
@@ -22,6 +25,8 @@ export class EndingScene extends Phaser.Scene {
   private ambience!: Ambience;
   private resets = 0;
   private flawless = 0;
+  private dawn = false;
+  private hearths = 0;
   private isNewBest = false;
 
   constructor() {
@@ -32,6 +37,8 @@ export class EndingScene extends Phaser.Scene {
     this.ambience = data.ambience;
     this.resets = data.resets ?? 0;
     this.flawless = data.flawless ?? 0;
+    this.dawn = data.dawn ?? false;
+    this.hearths = data.hearths ?? 0;
     this.isNewBest = this.recordBest(this.resets);
   }
 
@@ -61,17 +68,21 @@ export class EndingScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.lights.enable().setAmbientColor(0x0a0d18);
-    this.cameras.main.setBackgroundColor(0x05060c);
+    // A dawn ending is warm from the first frame - the Hollow's First Tree
+    // took the light, so the black the game has held for four acts finally
+    // gives. A forest ending keeps the old night.
+    this.lights.enable().setAmbientColor(this.dawn ? 0x2a1a10 : 0x0a0d18);
+    this.cameras.main.setBackgroundColor(this.dawn ? 0x1a0e08 : 0x05060c);
 
-    this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setDepth(-100);
+    const sky = this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "sky").setDepth(-100);
+    if (this.dawn) sky.setTint(0xff9a5a).setAlpha(0.85);
 
     const wisp = this.add
       .image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, "wisp")
       .setBlendMode(Phaser.BlendModes.ADD)
       .setScale(0.5)
       .setDepth(10);
-    const light = this.lights.addLight(wisp.x, wisp.y, 300, 0xffe6bf, 1.4);
+    const light = this.lights.addLight(wisp.x, wisp.y, 300, this.dawn ? 0xffc590 : 0xffe6bf, 1.4);
 
     this.ambience.setStorm(false);
     this.ambience.ending();
@@ -98,7 +109,7 @@ export class EndingScene extends Phaser.Scene {
     // own closing stats the least readable text in the game (found at the
     // 08-24 judging-day playtest).
     const line = this.add
-      .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.78, "the forest remembers the light", {
+      .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.78, this.dawn ? "you gave the light back, and the sun answered" : "the forest remembers the light", {
         fontFamily: "Georgia, 'Times New Roman', serif",
         fontSize: "24px",
         color: "#e7dcc2",
@@ -107,6 +118,19 @@ export class EndingScene extends Phaser.Scene {
       .setAlpha(0)
       .setDepth(20);
     this.tweens.add({ targets: line, alpha: 0.75, duration: 1400, delay: 2400, ease: "Sine.easeOut" });
+
+    if (this.dawn && this.hearths > 0) {
+      const hearthLine = this.add
+        .text(VIEW_WIDTH / 2, VIEW_HEIGHT * 0.81, `${this.hearths} hearths burn in the hollow behind you`, {
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+          fontSize: "14px",
+          color: "#e8b98a",
+        })
+        .setOrigin(0.5)
+        .setAlpha(0)
+        .setDepth(20);
+      this.tweens.add({ targets: hearthLine, alpha: 0.7, duration: 1400, delay: 2500, ease: "Sine.easeOut" });
+    }
 
     // Only worth a line when it happened - a run that skipped motes gets no
     // scolding, just the resets line it would have gotten anyway.
