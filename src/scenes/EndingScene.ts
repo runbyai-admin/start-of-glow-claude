@@ -1,7 +1,8 @@
 import Phaser from "phaser";
 import { makeGlowTexture, makeSkyTexture } from "../textures";
 import type { Ambience } from "../audio";
-import { VIEW_HEIGHT, VIEW_WIDTH } from "./dimensions";
+import { VIEW_HEIGHT, VIEW_WIDTH, WORLD_WIDTH } from "./dimensions";
+import { HOLLOW_LAYOUT } from "../hollow";
 
 interface EndingInitData {
   ambience: Ambience;
@@ -28,6 +29,52 @@ export class EndingScene extends Phaser.Scene {
   private dawn = false;
   private hearths = 0;
   private isNewBest = false;
+  /** The dawn's constellation: the Hollow's hearths and the roads between them, drawn in on scene time. */
+  private roadsGfx?: Phaser.GameObjects.Graphics;
+  private roadsStart = 0;
+
+  /**
+   * The roads the player lit, seen from above as the sun comes up: hearth to
+   * hearth in the order the Hollow was built, ending at the tree. Drawn on
+   * scene time rather than tweened, so the replay harness sees the same
+   * reveal a player does.
+   */
+  private drawRoads(time: number): void {
+    const g = this.roadsGfx;
+    if (!g) return;
+    g.clear();
+    const t = Math.max(0, Math.min(1, (time - this.roadsStart) / 4800));
+    const pts = HOLLOW_LAYOUT.hearths.map((h) => ({
+      x: VIEW_WIDTH * 0.16 + (h.x / WORLD_WIDTH) * VIEW_WIDTH * 0.68,
+      y: VIEW_HEIGHT * 0.2 + ((h.y - 200) / 380) * VIEW_HEIGHT * 0.22,
+      final: h.final === true,
+    }));
+    const segments = pts.length - 1;
+    for (let i = 0; i < segments; i += 1) {
+      const local = Math.max(0, Math.min(1, t * (segments + 1) - i));
+      if (local <= 0) continue;
+      const a = pts[i];
+      const b = pts[i + 1];
+      const ex = a.x + (b.x - a.x) * local;
+      const ey = a.y + (b.y - a.y) * local;
+      g.lineStyle(9, 0xff9a55, 0.08 * local);
+      g.lineBetween(a.x, a.y, ex, ey);
+      g.lineStyle(1.2, 0xffd9a8, 0.42 * local);
+      g.lineBetween(a.x, a.y, ex, ey);
+    }
+    pts.forEach((p, i) => {
+      const local = Math.max(0, Math.min(1, t * (segments + 1) - i + 0.6));
+      if (local <= 0) return;
+      g.fillStyle(0xffd9a8, 0.85 * local);
+      g.fillCircle(p.x, p.y, p.final ? 6 : 3.5);
+      g.fillStyle(0xff9a55, 0.25 * local);
+      g.fillCircle(p.x, p.y, p.final ? 18 : 10);
+    });
+  }
+
+  update(time: number): void {
+    if (this.roadsGfx) this.drawRoads(time);
+  }
 
   constructor() {
     super("ending");
@@ -99,6 +146,10 @@ export class EndingScene extends Phaser.Scene {
         duration: 4200,
         ease: "Sine.easeOut",
       });
+      // The roads pay off: as the sky warms, the Hollow's hearths and the
+      // threads between them are traced across it like a constellation.
+      this.roadsGfx = this.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(5);
+      this.roadsStart = this.time.now + 900;
     }
 
     const wisp = this.add
