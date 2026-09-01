@@ -760,6 +760,12 @@ export class LevelScene extends Phaser.Scene {
       h.pressure = h.alert
         ? Phaser.Math.Clamp(1 - (dist - ALERT_RADIUS_FLOOR) / Math.max(1, notice - ALERT_RADIUS_FLOOR), 0, 1)
         : 0;
+      // The Hollow's threads are made of given light: a shadow crossing one
+      // wades through it, slowed exactly as a radiance wave slows the
+      // forest's - so the road is the safe way as well as the fast way.
+      if (this.leylineNow.length > 0 && leylineAt(this.leylineNow, h.img.x, h.img.y) !== undefined) {
+        h.slowUntil = Math.max(h.slowUntil, this.time.now + 250);
+      }
       h.light.intensity = h.slowUntil > this.time.now
         ? 0.62
         : CALM_LIGHT_INTENSITY + (ALERT_LIGHT_INTENSITY - CALM_LIGHT_INTENSITY) * (h.alert ? 0.4 + 0.6 * h.pressure : 0);
