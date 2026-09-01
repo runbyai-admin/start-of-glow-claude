@@ -44,9 +44,12 @@ export class EndingScene extends Phaser.Scene {
     if (!g) return;
     g.clear();
     const t = Math.max(0, Math.min(1, (time - this.roadsStart) / 4800));
+    // High in the frame, above the wisp's bloom (which grows to cover the
+    // middle third in real time), and each line drawn twice: a dark stroke
+    // underneath that survives the bloom, a light one on top for the sky.
     const pts = HOLLOW_LAYOUT.hearths.map((h) => ({
       x: VIEW_WIDTH * 0.16 + (h.x / WORLD_WIDTH) * VIEW_WIDTH * 0.68,
-      y: VIEW_HEIGHT * 0.2 + ((h.y - 200) / 380) * VIEW_HEIGHT * 0.22,
+      y: VIEW_HEIGHT * 0.07 + ((h.y - 200) / 380) * VIEW_HEIGHT * 0.17,
       final: h.final === true,
     }));
     const segments = pts.length - 1;
@@ -57,18 +60,18 @@ export class EndingScene extends Phaser.Scene {
       const b = pts[i + 1];
       const ex = a.x + (b.x - a.x) * local;
       const ey = a.y + (b.y - a.y) * local;
-      g.lineStyle(9, 0xff9a55, 0.08 * local);
+      g.lineStyle(4, 0x4a1c08, 0.55 * local);
       g.lineBetween(a.x, a.y, ex, ey);
-      g.lineStyle(1.2, 0xffd9a8, 0.42 * local);
+      g.lineStyle(1.4, 0xffd9a8, 0.6 * local);
       g.lineBetween(a.x, a.y, ex, ey);
     }
     pts.forEach((p, i) => {
       const local = Math.max(0, Math.min(1, t * (segments + 1) - i + 0.6));
       if (local <= 0) return;
-      g.fillStyle(0xffd9a8, 0.85 * local);
+      g.fillStyle(0x4a1c08, 0.6 * local);
+      g.fillCircle(p.x, p.y, p.final ? 9 : 6);
+      g.fillStyle(0xffd9a8, 0.9 * local);
       g.fillCircle(p.x, p.y, p.final ? 6 : 3.5);
-      g.fillStyle(0xff9a55, 0.25 * local);
-      g.fillCircle(p.x, p.y, p.final ? 18 : 10);
     });
   }
 
@@ -148,7 +151,7 @@ export class EndingScene extends Phaser.Scene {
       });
       // The roads pay off: as the sky warms, the Hollow's hearths and the
       // threads between them are traced across it like a constellation.
-      this.roadsGfx = this.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(5);
+      this.roadsGfx = this.add.graphics().setDepth(5);
       this.roadsStart = this.time.now + 900;
     }
 
