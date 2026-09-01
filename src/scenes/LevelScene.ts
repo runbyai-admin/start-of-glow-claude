@@ -546,7 +546,13 @@ export class LevelScene extends Phaser.Scene {
       const tip = leylinePoint(line, grow);
       const under = this.carried > 0 && leylineAt([line], this.wisp.x, this.wisp.y) !== undefined;
       const lift = under ? 0.5 * this.carried : 0;
-      g.lineStyle(LEYLINE_HALF_WIDTH * 1.4, 0xff8a45, 0.045 + lift * 0.05);
+      // Three nested bands instead of one hard-edged strip: the road's edge
+      // falls off softly, which the render stills showed a single band cannot.
+      g.lineStyle(LEYLINE_HALF_WIDTH * 1.5, 0xff8a45, 0.022 + lift * 0.02);
+      g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
+      g.lineStyle(LEYLINE_HALF_WIDTH * 0.95, 0xff8a45, 0.025 + lift * 0.02);
+      g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
+      g.lineStyle(LEYLINE_HALF_WIDTH * 0.45, 0xffa060, 0.03 + lift * 0.03);
       g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
       g.lineStyle(2, 0xffc890, 0.22 + lift * 0.4 + (1 - grow) * 0.5);
       g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
