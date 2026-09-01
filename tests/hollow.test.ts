@@ -6,9 +6,16 @@ import {
   HEARTH_POOL_RADIUS,
   HOLLOW_LAYOUT,
   KINDLE_COST,
+  LEYLINE_CARRY,
+  LEYLINE_HALF_WIDTH,
+  LEYLINE_LANDING,
   finalUnlocked,
   hearthStates,
   kindleTarget,
+  leylineAt,
+  leylineBoost,
+  leylinePoint,
+  leylines,
   staticEmberBudget,
 } from "../src/hollow.ts";
 import { REACH_MIN, REACH_READY } from "../src/reach.ts";
@@ -76,4 +83,65 @@ test("every hearth is reachable from the previous one on a walk-and-press budget
       assert.ok(d > HEARTH_POOL_RADIUS, `hearths ${i} and ${j} are ${Math.round(d)}px apart - pools overlap`);
     }
   }
+});
+
+test("a lit hearth runs one thread to the nearest cold hearth, never to the tree early", () => {
+  const hearths = hearthStates(HOLLOW_LAYOUT);
+  assert.equal(leylines(hearths).length, 0, "no thread before any hearth burns");
+  hearths[0].lit = true;
+  const lines = leylines(hearths);
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].from, hearths[0]);
+  assert.equal(lines[0].to, hearths[1], "the teaching hearth points at the upper pocket");
+  // Everything but the last ordinary hearth lit: the thread from hearth 4
+  // goes to hearth 5, not the tree, because the tree is not takeable yet.
+  for (let i = 0; i < 4; i += 1) hearths[i].lit = true;
+  const late = leylines(hearths);
+  assert.ok(late.every((l) => !l.to.final), "no thread reaches the tree while a hearth is cold");
+  hearths[4].lit = true;
+  const last = leylines(hearths);
+  assert.ok(last.some((l) => l.to.final), "once every hearth burns, a thread runs to the First Tree");
+});
+
+test("the thread carries only a wisp moving along it, and only inside its width", () => {
+  const hearths = hearthStates(HOLLOW_LAYOUT);
+  hearths[0].lit = true;
+  const [line] = leylines(hearths);
+  const mid = leylinePoint(line, 0.5);
+  const on = leylineAt([line], mid.x, mid.y);
+  assert.ok(on, "the midpoint is on the thread");
+  assert.ok(on!.strength > 0.99);
+  const dt = 1 / 60;
+  const maxStep = 480 * dt;
+  const withIt = leylineBoost(on, on!.dirX * maxStep, on!.dirY * maxStep, dt, maxStep);
+  assert.ok(Math.hypot(withIt.x, withIt.y) > LEYLINE_CARRY * dt * 0.99, "full carry when moving with the road at speed");
+  const against = leylineBoost(on, -on!.dirX * maxStep, -on!.dirY * maxStep, dt, maxStep);
+  assert.deepEqual(against, { x: 0, y: 0 }, "no carry against the road");
+  const still = leylineBoost(on, 0, 0, dt, maxStep);
+  assert.deepEqual(still, { x: 0, y: 0 }, "a still wisp is never dragged");
+  // The eased tail after a released key is a crawl: a hundredth of a step
+  // along the road must earn next to nothing, or the road is a conveyor.
+  const crawl = leylineBoost(on, on!.dirX * maxStep * 0.01, on!.dirY * maxStep * 0.01, dt, maxStep);
+  assert.ok(Math.hypot(crawl.x, crawl.y) < LEYLINE_CARRY * dt * 0.05, "a crawl is not carried");
+  // Off the thread by more than its half-width: nothing.
+  const nx = -on!.dirY;
+  const ny = on!.dirX;
+  const off = leylineAt([line], mid.x + nx * (LEYLINE_HALF_WIDTH + 5), mid.y + ny * (LEYLINE_HALF_WIDTH + 5));
+  assert.equal(off, undefined);
+  // Past the cold end the road stops.
+  const beyond = leylineAt([line], line.to.x + on!.dirX * 30, line.to.y + on!.dirY * 30);
+  assert.equal(beyond, undefined);
+});
+
+test("the carry lets go before the cold hearth", () => {
+  const hearths = hearthStates(HOLLOW_LAYOUT);
+  hearths[0].lit = true;
+  const [line] = leylines(hearths);
+  const len = Math.hypot(line.to.x - line.from.x, line.to.y - line.from.y);
+  const mid = leylineAt([line], ...Object.values(leylinePoint(line, 0.5)) as [number, number]);
+  const near = leylineAt([line], ...Object.values(leylinePoint(line, 1 - 40 / len)) as [number, number]);
+  const atDoor = leylineAt([line], line.to.x, line.to.y);
+  assert.ok(mid && mid.strength > 0.99, "full carry mid-road");
+  assert.ok(near && near.strength < 40 / LEYLINE_LANDING + 0.01, "faded inside the landing stretch");
+  assert.equal(atDoor, undefined, "no carry at the socket itself");
 });

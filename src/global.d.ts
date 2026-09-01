@@ -42,6 +42,9 @@ interface GlowTestState {
   hearthsTotal?: number;
   hearths?: Array<{ x: number; y: number; lit: boolean; final: boolean }>;
   kindles?: number;
+  /** Threads from lit hearths to the next cold one, and how hard one is carrying the wisp right now (0..1). */
+  leylines?: Array<{ x1: number; y1: number; x2: number; y2: number }>;
+  carried?: number;
 }
 
 interface Window {

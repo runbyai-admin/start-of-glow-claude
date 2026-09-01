@@ -28,10 +28,16 @@ import {
   HEARTH_BREATH_MS,
   HEARTH_POOL_RADIUS,
   HOLLOW_LAYOUT,
+  LEYLINE_HALF_WIDTH,
   hearthStates,
   finalUnlocked,
   kindleTarget,
+  leylineAt,
+  leylineBoost,
+  leylinePoint,
+  leylines,
   type HearthState,
+  type Leyline,
 } from "../hollow";
 
 const COLLECT_RADIUS = 45;
@@ -185,6 +191,12 @@ export class LevelScene extends Phaser.Scene {
    */
   private pendingKindles: Array<{ hearth: number; igniteAt: number }> = [];
   private hollowEndAt = 0;
+  /** Threads of light from every lit hearth to the next cold one - see src/hollow.ts leylines. */
+  private leylineNow: Leyline[] = [];
+  private leylineGfx?: Phaser.GameObjects.Graphics;
+  private roadLine?: Phaser.GameObjects.Text;
+  /** Whether the thread carried the wisp this frame - drives the glow and the play driver's state. */
+  private carried = 0;
 
   private collected = 0;
   /** Motes actually placed this level - derived from the data used, never assumed from config. */
@@ -244,6 +256,10 @@ export class LevelScene extends Phaser.Scene {
     this.kindleLine = undefined;
     this.pendingKindles = [];
     this.hollowEndAt = 0;
+    this.leylineNow = [];
+    this.leylineGfx = undefined;
+    this.roadLine = undefined;
+    this.carried = 0;
     this.target.set(START_X, START_Y);
   }
 
@@ -501,6 +517,41 @@ export class LevelScene extends Phaser.Scene {
         .setStrokeStyle(1.5, 0xc9a289, 0.4)
         .setDepth(4);
       this.hearths.push({ state, img, halo, breathAt: 0, socket });
+    }
+    // The threads are redrawn every frame (five segments at most): they
+    // flow, and they brighten under the wisp while it is being carried.
+    this.leylineGfx = this.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(2);
+  }
+
+  /**
+   * Draw the leylines: a wide faint band that says "road", a thin bright
+   * core, and beads of light running from the lit hearth toward the cold
+   * one so the direction reads without a word.
+   */
+  private drawLeylines(time: number): void {
+    const g = this.leylineGfx;
+    if (!g) return;
+    g.clear();
+    if (this.leylineNow.length === 0) return;
+    const flow = (time * 0.00009) % 1;
+    for (const line of this.leylineNow) {
+      const under = this.carried > 0 && leylineAt([line], this.wisp.x, this.wisp.y) !== undefined;
+      const lift = under ? 0.5 * this.carried : 0;
+      g.lineStyle(LEYLINE_HALF_WIDTH * 1.4, 0xff8a45, 0.045 + lift * 0.05);
+      g.lineBetween(line.from.x, line.from.y, line.to.x, line.to.y);
+      g.lineStyle(2, 0xffc890, 0.22 + lift * 0.4);
+      g.lineBetween(line.from.x, line.from.y, line.to.x, line.to.y);
+      const len = Math.hypot(line.to.x - line.from.x, line.to.y - line.from.y);
+      const beads = Math.max(3, Math.floor(len / 64));
+      for (let i = 0; i < beads; i += 1) {
+        const t = (i / beads + flow) % 1;
+        const p = leylinePoint(line, t);
+        // Beads fade in at the lit end and out at the cold one - a breath
+        // travelling toward the hearth still to be given.
+        const a = Math.sin(t * Math.PI) * (0.35 + lift * 0.4);
+        g.fillStyle(0xffd9a8, a);
+        g.fillCircle(p.x, p.y, 3.2 + lift * 1.5);
+      }
     }
   }
 
@@ -1022,6 +1073,10 @@ export class LevelScene extends Phaser.Scene {
       onComplete: () => beam.destroy(),
     });
     this.pendingKindles.push({ hearth: this.hearths.indexOf(hearth), igniteAt: this.time.now + 340 });
+    // The light has already left the wisp: a shadow that touches it during
+    // the flight would kill a player who just paid to unmake that shadow.
+    // Watched in play - dead 130ms after a good press on hearth 2.
+    this.graceUntil = Math.max(this.graceUntil, this.time.now + 400);
     this.ambience.gather(1);
     this.updateHud();
     this.reportState();
@@ -1095,6 +1150,8 @@ export class LevelScene extends Phaser.Scene {
     this.ambience.kindle(hearth.state.final);
 
     this.banishShadows(hearth.state.x, hearth.state.y);
+    this.leylineNow = leylines(this.hearths.map((h) => h.state));
+    if (this.kindles === 1 && this.leylineNow.length > 0) this.showRoadLine();
     if (hearth.state.final) {
       this.completeHollow();
     } else {
@@ -1145,31 +1202,37 @@ export class LevelScene extends Phaser.Scene {
       const dist = rng.realInRange(70, HEARTH_POOL_RADIUS * 0.85);
       const tx = Phaser.Math.Clamp(hearth.state.x + Math.cos(angle) * dist, 40, WORLD_WIDTH - 40);
       const ty = Phaser.Math.Clamp(hearth.state.y + Math.sin(angle) * dist, 100, WORLD_HEIGHT - 60);
-      // Placed at its rest position from frame one: collection is gameplay,
-      // and a positional flight tween would let a player standing on the
-      // hearth swallow the whole gift before it scattered. The pop-in is
-      // purely cosmetic.
-      const ember = this.add
-        .image(tx, ty, "ember")
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setScale(0.8)
-        .setAlpha(0.3)
-        .setDepth(5);
-      ember.setData("restX", tx);
-      ember.setData("restY", ty);
-      this.tweens.add({
-        targets: ember,
-        y: ty - rng.between(8, 18),
-        alpha: { from: 0.6, to: 1 },
-        duration: rng.between(1200, 2000),
-        yoyo: true,
-        repeat: -1,
-        ease: "Sine.easeInOut",
-      });
-      this.motes.push(ember);
+      this.spawnEmber(tx, ty, rng);
     }
     // New light on the ground is state the play driver steers by.
     this.reportState();
+  }
+
+  /**
+   * One ember, placed at its rest position from frame one: collection is
+   * gameplay, and a positional flight tween would let a player standing on
+   * the hearth swallow the whole gift before it scattered. The pop-in is
+   * purely cosmetic.
+   */
+  private spawnEmber(tx: number, ty: number, rng: Phaser.Math.RandomDataGenerator): void {
+    const ember = this.add
+      .image(tx, ty, "ember")
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setScale(0.8)
+      .setAlpha(0.3)
+      .setDepth(5);
+    ember.setData("restX", tx);
+    ember.setData("restY", ty);
+    this.tweens.add({
+      targets: ember,
+      y: ty - rng.between(8, 18),
+      alpha: { from: 0.6, to: 1 },
+      duration: rng.between(1200, 2000),
+      yoyo: true,
+      repeat: -1,
+      ease: "Sine.easeInOut",
+    });
+    this.motes.push(ember);
   }
 
   /**
@@ -1182,12 +1245,49 @@ export class LevelScene extends Phaser.Scene {
       if (!hearth.state.lit || hearth.state.final) continue;
       if (this.time.now < hearth.breathAt) continue;
       hearth.breathAt = this.time.now + HEARTH_BREATH_MS;
+      // Once a thread runs from this hearth, its breath travels down the
+      // road instead of settling in the pool: the dark stretch ahead is
+      // where a walking player needs something to touch, not the ground
+      // they already stripped. The standing cap counts the road too.
+      const road = this.leylineNow.find((l) => l.from === hearth.state);
       const standing = this.motes.filter(
-        (m) => Phaser.Math.Distance.Between(m.x, m.y, hearth.state.x, hearth.state.y) <= HEARTH_POOL_RADIUS,
+        (m) =>
+          Phaser.Math.Distance.Between(m.x, m.y, hearth.state.x, hearth.state.y) <= HEARTH_POOL_RADIUS ||
+          (road !== undefined && leylineAt([road], m.x, m.y) !== undefined),
       ).length;
       if (standing >= HEARTH_BREATH_MAX_STANDING) continue;
-      this.releaseEmbers(hearth, 1);
+      if (road) {
+        const rng = new Phaser.Math.RandomDataGenerator([`hollow-breath-${hearth.state.x}-${this.collected}-${this.kindles}`]);
+        const p = leylinePoint(road, rng.realInRange(0.3, 0.7));
+        this.spawnEmber(p.x, p.y, rng);
+        this.reportState();
+      } else {
+        this.releaseEmbers(hearth, 1);
+      }
     }
+  }
+
+  /** The Hollow's second wordless lesson, once: the thread is a road, and it carries. */
+  private showRoadLine(): void {
+    this.roadLine = this.add
+      .text(VIEW_WIDTH / 2, VIEW_HEIGHT - 54, "a thread runs to the next hearth · walk it and the light carries you", {
+        fontFamily: "Georgia, 'Times New Roman', serif",
+        fontSize: "17px",
+        color: "#ffbe8a",
+      })
+      .setOrigin(0.5)
+      .setAlpha(0)
+      .setDepth(100)
+      .setScrollFactor(0);
+    this.tweens.add({
+      targets: this.roadLine,
+      alpha: 0.8,
+      duration: 900,
+      delay: 900,
+      ease: "Sine.easeOut",
+      yoyo: true,
+      hold: 4200,
+    });
   }
 
   /** A spent press answers immediately, but cannot pull or hide its state. */
@@ -1382,6 +1482,28 @@ export class LevelScene extends Phaser.Scene {
     }
     this.wisp.x += dx;
     this.wisp.y += dy;
+    // The Hollow's threads carry a wisp moving along them. Under keyboard
+    // steering the target trails the wisp, so the push lands on it too or the
+    // ease pulls the ground back next frame; under the pointer the target IS
+    // where the player pointed, and the carry only gets them there sooner.
+    this.carried = 0;
+    if (this.leylineNow.length > 0) {
+      const carry = leylineAt(this.leylineNow, this.wisp.x, this.wisp.y);
+      const boost = leylineBoost(carry, dx, dy, dt, maxStep);
+      if (boost.x !== 0 || boost.y !== 0) {
+        this.wisp.x = Phaser.Math.Clamp(this.wisp.x + boost.x, 27, WORLD_WIDTH - 27);
+        this.wisp.y = Phaser.Math.Clamp(this.wisp.y + boost.y, 27, WORLD_HEIGHT - 27);
+        const keyed =
+          this.cursors.left.isDown || this.cursors.right.isDown || this.cursors.up.isDown || this.cursors.down.isDown ||
+          this.wasd.left.isDown || this.wasd.right.isDown || this.wasd.up.isDown || this.wasd.down.isDown;
+        if (keyed) {
+          this.target.x = Phaser.Math.Clamp(this.target.x + boost.x, 27, WORLD_WIDTH - 27);
+          this.target.y = Phaser.Math.Clamp(this.target.y + boost.y, 27, WORLD_HEIGHT - 27);
+        }
+        this.carried = carry ? carry.strength : 0;
+        this.pulseBoost = Math.max(this.pulseBoost, 0.25 * this.carried);
+      }
+    }
     this.wispLight.setPosition(this.wisp.x, this.wisp.y);
     this.hazardTrail.setPosition(0, 0);
 
@@ -1413,6 +1535,7 @@ export class LevelScene extends Phaser.Scene {
     if (this.isKindle()) {
       this.resolveKindles();
       this.breatheHearths();
+      this.drawLeylines(time);
     }
 
     // Keep the published positions live between collect/fail events, so a
@@ -1931,6 +2054,8 @@ export class LevelScene extends Phaser.Scene {
             hearthsTotal: this.hearths.filter((h) => !h.state.final).length,
             hearths: this.hearths.map((h) => ({ x: h.state.x, y: h.state.y, lit: h.state.lit, final: h.state.final })),
             kindles: this.kindles,
+            leylines: this.leylineNow.map((l) => ({ x1: l.from.x, y1: l.from.y, x2: l.to.x, y2: l.to.y })),
+            carried: Math.round(this.carried * 100) / 100,
           }
         : {}),
     };
