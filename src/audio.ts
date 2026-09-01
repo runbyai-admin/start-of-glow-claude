@@ -20,6 +20,59 @@ export class Ambience {
   private stormDesired = false;
   private stormGain: GainNode | null = null;
   private stormLfoGain: GainNode | null = null;
+  private carryGain: GainNode | null = null;
+  private carryLevel = 0;
+
+  /**
+   * The Hollow's leyline carry, called every frame with 0..1: a breathy
+   * high shimmer that swells while the thread has the wisp and falls away
+   * the moment it lets go. Sustained nodes, built once, so the hand hears
+   * the road as a rising wind and not as a sound effect that repeats.
+   */
+  carry(strength: number): void {
+    const level = Math.max(0, Math.min(1, strength));
+    if (level === this.carryLevel) return;
+    this.carryLevel = level;
+    if (!this.ctx || !this.master) return;
+    try {
+      const ctx = this.ctx;
+      if (!this.carryGain) {
+        const size = Math.floor(ctx.sampleRate * 2);
+        const buffer = ctx.createBuffer(1, size, ctx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < size; i += 1) data[i] = Math.random() * 2 - 1;
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.loop = true;
+        const filter = ctx.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.value = 1900;
+        filter.Q.value = 1.4;
+        const gain = ctx.createGain();
+        gain.gain.value = 0;
+        src.connect(filter);
+        filter.connect(gain);
+        // A thin fifth over the kindle's bloom, so the road sounds like the
+        // hearths' light and not like weather.
+        const tone = ctx.createOscillator();
+        tone.type = "sine";
+        tone.frequency.value = 659.25;
+        const toneGain = ctx.createGain();
+        toneGain.gain.value = 0.22;
+        tone.connect(toneGain);
+        toneGain.connect(gain);
+        gain.connect(this.master);
+        src.start();
+        tone.start();
+        this.carryGain = gain;
+      }
+      const now = ctx.currentTime;
+      this.carryGain.gain.cancelScheduledValues(now);
+      this.carryGain.gain.setTargetAtTime(level * 0.05, now, level > 0 ? 0.18 : 0.3);
+    } catch {
+      /* atmosphere only */
+    }
+  }
 
   unlock(): void {
     if (this.unlocked) return;

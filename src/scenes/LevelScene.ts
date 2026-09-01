@@ -197,6 +197,7 @@ export class LevelScene extends Phaser.Scene {
   private roadLine?: Phaser.GameObjects.Text;
   /** Whether the thread carried the wisp this frame - drives the glow and the play driver's state. */
   private carried = 0;
+  private carrySparks?: Phaser.GameObjects.Particles.ParticleEmitter;
 
   private collected = 0;
   /** Motes actually placed this level - derived from the data used, never assumed from config. */
@@ -572,6 +573,21 @@ export class LevelScene extends Phaser.Scene {
     this.wisp = this.add.image(this.target.x, this.target.y, "wisp").setBlendMode(Phaser.BlendModes.ADD).setScale(0.5).setDepth(10);
     this.wispLight = this.lights.addLight(this.wisp.x, this.wisp.y, REACH_START, 0xbfe4ff, 1.6);
     this.trail.startFollow(this.wisp);
+    // The road's tail: warm sparks that stream off the wisp only while a
+    // thread is carrying it, fired by hand each frame so speed reads as
+    // light being shed, not as a permanent costume.
+    if (this.isKindle()) {
+      this.carrySparks = this.add.particles(0, 0, "spark", {
+        speed: { min: 40, max: 120 },
+        lifespan: { min: 350, max: 700 },
+        scale: { start: 0.7, end: 0 },
+        alpha: { start: 0.7, end: 0 },
+        tint: [0xffc890, 0xff9a55, 0xffe6a8],
+        blendMode: Phaser.BlendModes.ADD,
+        emitting: false,
+      });
+      this.carrySparks.setDepth(9);
+    }
 
     // The edge of the light, drawn thin. Light2D already falls off at exactly
     // this radius, but a soft gradient does not tell you where the rule ends -
@@ -1502,8 +1518,12 @@ export class LevelScene extends Phaser.Scene {
         }
         this.carried = carry ? carry.strength : 0;
         this.pulseBoost = Math.max(this.pulseBoost, 0.25 * this.carried);
+        if (this.carrySparks && this.carried > 0.2) {
+          this.carrySparks.emitParticleAt(this.wisp.x - boost.x * 3, this.wisp.y - boost.y * 3, this.carried > 0.6 ? 2 : 1);
+        }
       }
     }
+    if (this.isKindle()) this.ambience.carry(this.carried);
     this.wispLight.setPosition(this.wisp.x, this.wisp.y);
     this.hazardTrail.setPosition(0, 0);
 
