@@ -193,6 +193,8 @@ export class LevelScene extends Phaser.Scene {
   private hollowEndAt = 0;
   /** Threads of light from every lit hearth to the next cold one - see src/hollow.ts leylines. */
   private leylineNow: Leyline[] = [];
+  /** When each thread was drawn (scene time), keyed by its lit end - a re-pointed thread is drawn afresh. */
+  private leylineBorn = new Map<HearthState, { to: HearthState; at: number }>();
   private leylineGfx?: Phaser.GameObjects.Graphics;
   private roadLine?: Phaser.GameObjects.Text;
   /** Whether the thread carried the wisp this frame - drives the glow and the play driver's state. */
@@ -258,6 +260,7 @@ export class LevelScene extends Phaser.Scene {
     this.pendingKindles = [];
     this.hollowEndAt = 0;
     this.leylineNow = [];
+    this.leylineBorn = new Map();
     this.leylineGfx = undefined;
     this.roadLine = undefined;
     this.carried = 0;
@@ -536,16 +539,26 @@ export class LevelScene extends Phaser.Scene {
     if (this.leylineNow.length === 0) return;
     const flow = (time * 0.00009) % 1;
     for (const line of this.leylineNow) {
+      // A new thread shoots out of the hearth that just took the light and
+      // reaches the cold one in under a second: the press draws the road.
+      const born = this.leylineBorn.get(line.from);
+      const grow = born ? Math.min(1, (time - born.at) / 750) : 1;
+      const tip = leylinePoint(line, grow);
       const under = this.carried > 0 && leylineAt([line], this.wisp.x, this.wisp.y) !== undefined;
       const lift = under ? 0.5 * this.carried : 0;
       g.lineStyle(LEYLINE_HALF_WIDTH * 1.4, 0xff8a45, 0.045 + lift * 0.05);
-      g.lineBetween(line.from.x, line.from.y, line.to.x, line.to.y);
-      g.lineStyle(2, 0xffc890, 0.22 + lift * 0.4);
-      g.lineBetween(line.from.x, line.from.y, line.to.x, line.to.y);
+      g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
+      g.lineStyle(2, 0xffc890, 0.22 + lift * 0.4 + (1 - grow) * 0.5);
+      g.lineBetween(line.from.x, line.from.y, tip.x, tip.y);
+      if (grow < 1) {
+        g.fillStyle(0xfff0d0, 0.9);
+        g.fillCircle(tip.x, tip.y, 6);
+      }
       const len = Math.hypot(line.to.x - line.from.x, line.to.y - line.from.y);
       const beads = Math.max(3, Math.floor(len / 64));
       for (let i = 0; i < beads; i += 1) {
         const t = (i / beads + flow) % 1;
+        if (t > grow) continue;
         const p = leylinePoint(line, t);
         // Beads fade in at the lit end and out at the cold one - a breath
         // travelling toward the hearth still to be given.
@@ -1167,6 +1180,10 @@ export class LevelScene extends Phaser.Scene {
 
     this.banishShadows(hearth.state.x, hearth.state.y);
     this.leylineNow = leylines(this.hearths.map((h) => h.state));
+    for (const line of this.leylineNow) {
+      const born = this.leylineBorn.get(line.from);
+      if (!born || born.to !== line.to) this.leylineBorn.set(line.from, { to: line.to, at: this.time.now });
+    }
     if (this.kindles === 1 && this.leylineNow.length > 0) this.showRoadLine();
     if (hearth.state.final) {
       this.completeHollow();

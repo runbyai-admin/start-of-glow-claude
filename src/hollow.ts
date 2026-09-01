@@ -164,7 +164,7 @@ export const KINDLE_COST = REACH_READY - REACH_MIN;
  * road only helps travel WITH it (toward the cold hearth); it never drags a
  * still wisp anywhere, so it cannot deliver a player into a patrol.
  */
-export const LEYLINE_HALF_WIDTH = 56;
+export const LEYLINE_HALF_WIDTH = 72;
 /** Extra speed along the thread at its centre, on top of the wisp's own 480. */
 export const LEYLINE_CARRY = 300;
 /** The road's last stretch, where the carry fades to nothing before the cold hearth. */
